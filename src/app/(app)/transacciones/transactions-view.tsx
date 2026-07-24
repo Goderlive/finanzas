@@ -1,14 +1,21 @@
 "use client";
 
 import {
+  useEffect,
   useMemo,
   useOptimistic,
   useRef,
   useState,
   useTransition,
 } from "react";
+import { useRouter } from "next/navigation";
 import { MoreVertical, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import {
+  enqueueTransaction,
+  flushQueue,
+  getQueued,
+} from "@/lib/offline/transactions";
 import type {
   Tables,
   TransactionType,
@@ -70,6 +77,7 @@ export function TransactionsView({
   currency,
   defaultDate,
   currentUserId,
+  householdId,
 }: {
   transactions: Tables<"transactions">[];
   accounts: FormAccount[];
@@ -80,7 +88,9 @@ export function TransactionsView({
   currency: string;
   defaultDate: string;
   currentUserId: string;
+  householdId: string;
 }) {
+  const router = useRouter();
   const rawById = useMemo(
     () => new Map(transactions.map((t) => [t.id, t])),
     [transactions],
@@ -118,6 +128,61 @@ export function TransactionsView({
   const [editing, setEditing] = useState<Tables<"transactions"> | null>(null);
   const [, startTransition] = useTransition();
   const formRef = useRef<HTMLFormElement>(null);
+  const [queued, setQueued] = useState<Display[]>([]);
+
+  // Sincroniza la cola offline al montar y al reconectar; guarda un cache
+  // ligero para la página offline.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "finanzas-offline-cache",
+        JSON.stringify({ accounts, categories, householdId, currentUserId, defaultDate }),
+      );
+    } catch {
+      /* localStorage puede fallar en modo privado */
+    }
+
+    let active = true;
+    async function loadQueued() {
+      const q = await getQueued();
+      if (!active) return;
+      setQueued(
+        q.map((it) => ({
+          id: it.id,
+          type: it.payload.type,
+          amount: it.payload.amount,
+          description: it.payload.description ?? null,
+          occurred_at: it.payload.occurred_at ?? defaultDate,
+          accountName: accountNames[it.payload.account_id] ?? "—",
+          categoryName: it.payload.category_id
+            ? (categoryNames[it.payload.category_id] ?? null)
+            : null,
+          transferName: it.payload.transfer_account_id
+            ? (accountNames[it.payload.transfer_account_id] ?? null)
+            : null,
+          createdByName: memberNames[it.payload.created_by] ?? "",
+          pending: true,
+        })),
+      );
+    }
+    async function sync() {
+      if (navigator.onLine) {
+        const n = await flushQueue();
+        if (n > 0) {
+          toast.success(`${n} movimiento${n === 1 ? "" : "s"} sincronizado${n === 1 ? "" : "s"}`);
+          router.refresh();
+        }
+      }
+      await loadQueued();
+    }
+    sync();
+    window.addEventListener("online", sync);
+    return () => {
+      active = false;
+      window.removeEventListener("online", sync);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transactions]);
 
   async function quickAdd(formData: FormData) {
     const accountId = String(formData.get("accountId") ?? "");
@@ -130,6 +195,41 @@ export function TransactionsView({
       /* validado en el servidor */
     }
 
+    const catId = categoryId !== "none" ? categoryId : null;
+
+    // Sin conexión: encolar en IndexedDB y mostrar como pendiente.
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      await enqueueTransaction({
+        household_id: householdId,
+        account_id: accountId,
+        transfer_account_id: null,
+        category_id: catId,
+        type,
+        amount,
+        description: null,
+        occurred_at: defaultDate,
+        created_by: currentUserId,
+      });
+      setQueued((prev) => [
+        {
+          id: `q-${Date.now()}`,
+          type,
+          amount,
+          description: null,
+          occurred_at: defaultDate,
+          accountName: accountNames[accountId] ?? "—",
+          categoryName: catId ? (categoryNames[catId] ?? null) : null,
+          transferName: null,
+          createdByName: memberNames[currentUserId] ?? "",
+          pending: true,
+        },
+        ...prev,
+      ]);
+      toast.message("Guardado offline. Se sincronizará al reconectar.");
+      formRef.current?.reset();
+      return;
+    }
+
     dispatch({
       kind: "add",
       item: {
@@ -139,7 +239,7 @@ export function TransactionsView({
         description: null,
         occurred_at: defaultDate,
         accountName: accountNames[accountId] ?? "—",
-        categoryName: categoryId !== "none" ? (categoryNames[categoryId] ?? null) : null,
+        categoryName: catId ? (categoryNames[catId] ?? null) : null,
         transferName: null,
         createdByName: memberNames[currentUserId] ?? "",
         pending: true,
@@ -164,7 +264,10 @@ export function TransactionsView({
     });
   }
 
-  const groups = useMemo(() => groupByDate(items), [items]);
+  const groups = useMemo(
+    () => groupByDate([...queued, ...items]),
+    [items, queued],
+  );
 
   return (
     <div className="space-y-6">
@@ -176,7 +279,7 @@ export function TransactionsView({
         onSubmit={quickAdd}
       />
 
-      {items.length === 0 ? (
+      {queued.length + items.length === 0 ? (
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           Aún no hay movimientos. Agrega el primero arriba.
         </div>

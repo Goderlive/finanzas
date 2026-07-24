@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import type { Database } from "./database.types";
 
 // Rutas accesibles sin sesión iniciada.
-const PUBLIC_PREFIXES = ["/login", "/register", "/invite", "/auth"];
+const PUBLIC_PREFIXES = ["/login", "/register", "/invite", "/auth", "/offline"];
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });

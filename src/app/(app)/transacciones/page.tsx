@@ -70,6 +70,7 @@ export default async function TransaccionesPage() {
         currency={currency}
         defaultDate={today}
         currentUserId={session?.user.id ?? ""}
+        householdId={household?.id ?? ""}
       />
     </div>
   );

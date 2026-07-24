@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import {
+  BarChart3,
   CreditCard,
   Home,
   LogOut,
@@ -44,6 +45,12 @@ export function UserMenu({
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/reportes" className="flex w-full items-center gap-2">
+            <BarChart3 className="h-4 w-4" />
+            Reportes
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <Link href="/presupuestos" className="flex w-full items-center gap-2">
             <PieChart className="h-4 w-4" />
