@@ -8,11 +8,14 @@ import { computeBalance, type Member } from "./compartidos/balance";
 import { childrenMap, rollupSpent, type SpentMap } from "./presupuestos/compute";
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Amount } from "@/components/amount";
+import { PrivacyToggle } from "@/components/privacy";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -154,13 +157,18 @@ export default async function HomePage() {
               netWorth < 0 && "text-destructive",
             )}
           >
-            {formatMoney(netWorth, currency)}
+            <Amount mask="••••••••">{formatMoney(netWorth, currency)}</Amount>
           </CardTitle>
+          <CardAction>
+            <PrivacyToggle className="-mr-2 -mt-1" />
+          </CardAction>
         </CardHeader>
         <CardContent className="text-xs text-muted-foreground">
-          Cuentas {formatMoney(accountsTotal, currency)} + inversiones{" "}
-          {formatMoney(investmentsValue, currency)} − deudas{" "}
-          {formatMoney(debtsTotal, currency)}.
+          Cuentas <Amount mask="•••••">{formatMoney(accountsTotal, currency)}</Amount>{" "}
+          + inversiones{" "}
+          <Amount mask="•••••">{formatMoney(investmentsValue, currency)}</Amount>{" "}
+          − deudas{" "}
+          <Amount mask="•••••">{formatMoney(debtsTotal, currency)}</Amount>.
         </CardContent>
       </Card>
 
@@ -180,8 +188,10 @@ export default async function HomePage() {
                 : "text-destructive",
             )}
           >
-            {flow >= 0 ? "+" : "-"}
-            {formatMoney(Math.abs(flow), currency)}
+            <Amount mask="•••••••">
+              {flow >= 0 ? "+" : "-"}
+              {formatMoney(Math.abs(flow), currency)}
+            </Amount>
           </CardTitle>
         </CardHeader>
       </Card>
@@ -216,9 +226,9 @@ export default async function HomePage() {
             <CardHeader className="pb-2">
               <CardDescription>Presupuesto del mes</CardDescription>
               <CardTitle className="text-lg tabular-nums">
-                {formatMoney(budgetSpent, currency)}{" "}
+                <Amount>{formatMoney(budgetSpent, currency)}</Amount>{" "}
                 <span className="text-sm font-normal text-muted-foreground">
-                  de {formatMoney(budgetLimit, currency)}
+                  de <Amount>{formatMoney(budgetLimit, currency)}</Amount>
                 </span>
               </CardTitle>
             </CardHeader>
@@ -248,9 +258,9 @@ export default async function HomePage() {
                     le debe a
                   </span>{" "}
                   {balance.creditor?.name}{" "}
-                  <span className="tabular-nums">
+                  <Amount className="tabular-nums">
                     {formatMoney(balance.amount, currency)}
-                  </span>
+                  </Amount>
                 </CardTitle>
               )}
             </CardHeader>
@@ -304,7 +314,7 @@ function StatCard({
               : "text-foreground",
           )}
         >
-          {value}
+          <Amount>{value}</Amount>
         </CardTitle>
       </CardHeader>
     </Card>

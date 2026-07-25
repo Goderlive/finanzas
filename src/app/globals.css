@@ -126,3 +126,19 @@
     @apply bg-background text-foreground;
   }
 }
+
+/*
+ * Modo privado ("ojito"): oculta los importes en pantalla. El atributo
+ * data-amounts="hidden" lo pone un script inline antes del primer paint y lo
+ * alterna PrivacyToggle, así el enmascarado es puro CSS y funciona igual en
+ * componentes de servidor.
+ */
+.private-show {
+  display: none;
+}
+[data-amounts="hidden"] .private-hide {
+  display: none;
+}
+[data-amounts="hidden"] .private-show {
+  display: inline;
+}
