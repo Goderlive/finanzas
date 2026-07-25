@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#818cf8"/>
+      <stop offset="0.45" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#4338ca"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.28" cy="0.18" r="0.9">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.32"/>
+      <stop offset="0.65" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <rect width="512" height="512" fill="url(#glow)"/>
+
+  <!-- signo de pesos -->
+  <g stroke="#ffffff" stroke-linecap="round" fill="none">
+    <line x1="256" y1="98" x2="256" y2="414" stroke-width="30"/>
+    <path d="M 338 190
+             C 338 156, 302 132, 256 132
+             C 208 132, 172 154, 172 194
+             C 172 232, 208 248, 256 256
+             C 304 264, 340 282, 340 318
+             C 340 358, 304 380, 256 380
+             C 210 380, 174 356, 174 322"
+          stroke-width="38" stroke-linejoin="round"/>
+  </g>
+</svg>

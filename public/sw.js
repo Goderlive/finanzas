@@ -4,7 +4,9 @@
 //  - Navegaciones: network-first con fallback a /offline cuando no hay red.
 //  - Nunca cachea llamadas a Supabase ni auth.
 
-const CACHE = "finanzas-v1";
+// Subir la versión al cambiar assets del shell (p. ej. los iconos): al activarse
+// borra las caches viejas y así no se sirven iconos obsoletos por cache-first.
+const CACHE = "finanzas-v2";
 const APP_SHELL = ["/offline", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -45,6 +47,7 @@ self.addEventListener("fetch", (event) => {
   if (
     url.pathname.startsWith("/_next/static") ||
     url.pathname.startsWith("/icon-") ||
+    url.pathname === "/icon.svg" ||
     url.pathname === "/apple-touch-icon.png"
   ) {
     event.respondWith(
