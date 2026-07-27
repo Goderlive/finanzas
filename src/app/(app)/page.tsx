@@ -1,11 +1,24 @@
 import Link from "next/link";
-import { ArrowRight, Users, UserPlus } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  CreditCard,
+  Users,
+  UserPlus,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getHousehold, getHouseholdMembers } from "@/lib/household";
 import { formatMoney } from "@/lib/money";
 import { ProgressBar, type ProgressTone } from "@/components/progress-bar";
 import { computeBalance, type Member } from "./compartidos/balance";
 import { childrenMap, rollupSpent, type SpentMap } from "./presupuestos/compute";
+import {
+  computeCreditCardCycle,
+  type CyclePlan,
+  type CycleMovement,
+} from "@/lib/credit-cycle";
+import { CreditCycleSummary } from "@/components/credit-cycle-summary";
+import { computeFixedIncome } from "@/lib/fixed-income";
 import {
   Card,
   CardAction,
@@ -24,9 +37,16 @@ export default async function HomePage() {
 
   const now = new Date();
   const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  // El periodo en curso de una tarjeta nunca pasa de 31 días; con 100 sobra
+  // para reconstruirlo sin traerse el histórico completo.
+  const cycleWindow = new Date(now);
+  cycleWindow.setDate(cycleWindow.getDate() - 100);
+  const cycleStart = `${cycleWindow.getFullYear()}-${String(cycleWindow.getMonth() + 1).padStart(2, "0")}-${String(cycleWindow.getDate()).padStart(2, "0")}`;
 
   const [
     { data: accounts },
+    { data: cardMovements },
+    { data: msiPlans },
     { data: monthTx },
     { data: sharedExpenses },
     { data: settlements },
@@ -38,7 +58,22 @@ export default async function HomePage() {
     household,
     membersRaw,
   ] = await Promise.all([
-    supabase.from("accounts").select("current_balance").eq("is_archived", false),
+    supabase
+      .from("accounts")
+      .select(
+        "id, name, type, current_balance, statement_day, payment_day, credit_limit",
+      )
+      .eq("is_archived", false),
+    supabase
+      .from("transactions")
+      .select("id, account_id, transfer_account_id, type, amount, occurred_at")
+      .gte("occurred_at", cycleStart),
+    supabase
+      .from("installment_plans")
+      .select(
+        "id, transaction_id, total_amount, purchase:transactions!inner(account_id, occurred_at), installments:installment_payments(statement_period, amount, is_paid)",
+      )
+      .neq("status", "cancelled"),
     supabase
       .from("transactions")
       .select("type, amount, category_id")
@@ -50,7 +85,11 @@ export default async function HomePage() {
     supabase.from("budgets").select("category_id, amount").eq("month", monthStart),
     supabase.from("categories").select("id, parent_id"),
     supabase.from("debts").select("name, current_balance, due_day"),
-    supabase.from("investments").select("id, quantity, purchase_price"),
+    supabase
+      .from("investments")
+      .select(
+        "id, name, investment_type, quantity, purchase_price, purchase_date, principal, annual_rate, start_date, maturity_date, compounding, reinvests_at_maturity",
+      ),
     supabase
       .from("price_snapshots")
       .select("investment_id, price, as_of")
@@ -94,16 +133,99 @@ export default async function HomePage() {
       latestPrice.set(s.investment_id, s.price);
     }
   }
-  const investmentsValue = (investments ?? []).reduce((sum, inv) => {
-    const price = latestPrice.get(inv.id);
-    return (
-      sum +
-      (price != null
-        ? Math.round(inv.quantity * price)
-        : Math.round(inv.quantity * inv.purchase_price))
-    );
-  }, 0);
+  // Portafolio = renta variable valuada a último precio + renta fija devengada.
+  const variableValue = (investments ?? [])
+    .filter((inv) => inv.investment_type === "variable")
+    .reduce((sum, inv) => {
+      const quantity = inv.quantity ?? 0;
+      const price = latestPrice.get(inv.id) ?? inv.purchase_price ?? 0;
+      return sum + Math.round(quantity * price);
+    }, 0);
+
+  const fixedHoldings = (investments ?? [])
+    .filter((inv) => inv.investment_type === "fixed")
+    .map((inv) => ({
+      inv,
+      state: computeFixedIncome({
+        principal: inv.principal ?? 0,
+        annual_rate: inv.annual_rate ?? 0,
+        start_date: inv.start_date ?? inv.purchase_date,
+        maturity_date: inv.maturity_date ?? inv.purchase_date,
+        compounding: inv.compounding ?? "simple",
+        reinvests_at_maturity: inv.reinvests_at_maturity ?? false,
+      }),
+    }));
+  const fixedValue = fixedHoldings.reduce((s, f) => s + f.state.currentValue, 0);
+  const investmentsValue = variableValue + fixedValue;
   const netWorth = accountsTotal + investmentsValue - debtsTotal;
+
+  // Vencimientos de renta fija a menos de 7 días.
+  const maturingSoon = fixedHoldings
+    .filter((f) => f.state.maturingSoon)
+    .sort((a, b) => a.state.daysRemaining - b.state.daysRemaining);
+
+  // Ciclo de las tarjetas de crédito, corregido por las compras a MSI.
+  const cardMovementList = (cardMovements ?? []) as CycleMovement[];
+  // Los tipos escritos a mano no modelan los embeds de PostgREST.
+  const msiPlanList = (msiPlans ?? []) as unknown as Array<{
+    id: string;
+    transaction_id: string;
+    total_amount: number;
+    purchase: { account_id: string; occurred_at: string };
+    installments: {
+      statement_period: string;
+      amount: number;
+      is_paid: boolean;
+    }[];
+  }>;
+  const plansByCard = new Map<string, CyclePlan[]>();
+  for (const p of msiPlanList) {
+    const list = plansByCard.get(p.purchase.account_id) ?? [];
+    list.push({
+      transaction_id: p.transaction_id,
+      occurred_at: p.purchase.occurred_at,
+      total_amount: p.total_amount,
+      installments: p.installments ?? [],
+    });
+    plansByCard.set(p.purchase.account_id, list);
+  }
+
+  const cards = (accounts ?? [])
+    .filter((a) => a.type === "credit_card")
+    .map((a) => ({
+      account: a,
+      cycle: computeCreditCardCycle(
+        a,
+        cardMovementList.filter(
+          (m) => m.account_id === a.id || m.transfer_account_id === a.id,
+        ),
+        plansByCard.get(a.id) ?? [],
+      ),
+    }))
+    .filter((c) => c.cycle.configured || c.cycle.currentDebt > 0)
+    .sort((a, b) => {
+      // Primero lo vencido, luego lo que vence antes.
+      if (a.cycle.overdue !== b.cycle.overdue) return a.cycle.overdue ? -1 : 1;
+      return (a.cycle.daysToDue ?? 999) - (b.cycle.daysToDue ?? 999);
+    });
+  const cardsStatementDebt = cards.reduce(
+    (s, c) => s + c.cycle.statementDebt,
+    0,
+  );
+  // Deuda de tarjeta separada en sus dos naturalezas: la revolvente (facturada
+  // y periodo en curso) y lo diferido a MSI que el banco aún no cobra. Suman
+  // exactamente el cargo total de las tarjetas.
+  const revolvingDebt = cards.reduce((s, c) => s + c.cycle.currentDebt, 0);
+  const msiUnbilledDebt = cards.reduce((s, c) => s + c.cycle.msiUnbilled, 0);
+  // Todas las mensualidades que faltan por pagar, marcadas o no.
+  const msiPendingTotal = msiPlanList.reduce(
+    (s, p) =>
+      s +
+      (p.installments ?? [])
+        .filter((i) => !i.is_paid)
+        .reduce((a, i) => a + i.amount, 0),
+    0,
+  );
 
   // Próximos vencimientos de deudas (con día de pago).
   const upcoming = (debts ?? [])
@@ -195,6 +317,94 @@ export default async function HomePage() {
           </CardTitle>
         </CardHeader>
       </Card>
+
+      {maturingSoon.length > 0 ? (
+        <Link href="/inversiones" className="block">
+          <div className="flex gap-3 rounded-lg border border-amber-500/60 bg-amber-500/5 p-3 text-sm transition-colors hover:bg-amber-500/10">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div className="space-y-0.5">
+              <p className="font-medium text-amber-700 dark:text-amber-400">
+                {maturingSoon.length === 1
+                  ? "Una inversión vence pronto"
+                  : `${maturingSoon.length} inversiones vencen pronto`}
+              </p>
+              {maturingSoon.map(({ inv, state }) => (
+                <p key={inv.id} className="text-muted-foreground">
+                  {inv.name} —{" "}
+                  {state.daysRemaining === 0
+                    ? "vence hoy"
+                    : `en ${state.daysRemaining} ${state.daysRemaining === 1 ? "día" : "días"}`}
+                  {inv.reinvests_at_maturity ? ", se reinvierte" : ""}
+                </p>
+              ))}
+            </div>
+          </div>
+        </Link>
+      ) : null}
+
+      {cards.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1.5">
+              <CreditCard className="h-3.5 w-3.5" />
+              Tarjetas de crédito
+            </CardDescription>
+            {cardsStatementDebt > 0 ? (
+              <CardTitle className="text-lg tabular-nums">
+                <Amount mask="•••••••">
+                  {formatMoney(cardsStatementDebt, currency)}
+                </Amount>{" "}
+                <span className="text-sm font-normal text-muted-foreground">
+                  por pagar de los últimos cortes
+                </span>
+              </CardTitle>
+            ) : (
+              <CardTitle className="text-lg text-emerald-600 dark:text-emerald-400">
+                Sin saldo por pagar ✓
+              </CardTitle>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {msiUnbilledDebt > 0 || msiPendingTotal > 0 ? (
+              <Link
+                href="/compromisos"
+                className="-mx-1 flex items-center justify-between gap-2 rounded-md px-1 py-1 transition-colors hover:bg-muted/40"
+              >
+                <div className="grid flex-1 grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <div className="text-xs text-muted-foreground">
+                      Revolvente
+                    </div>
+                    <div className="font-medium tabular-nums">
+                      <Amount mask="•••••">
+                        {formatMoney(revolvingDebt, currency)}
+                      </Amount>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">
+                      MSI pendiente
+                    </div>
+                    <div className="font-medium tabular-nums">
+                      <Amount mask="•••••">
+                        {formatMoney(msiPendingTotal, currency)}
+                      </Amount>
+                    </div>
+                  </div>
+                </div>
+                <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </Link>
+            ) : null}
+
+            {cards.map(({ account, cycle }) => (
+              <div key={account.id} className="space-y-2">
+                <div className="text-sm font-medium">{account.name}</div>
+                <CreditCycleSummary cycle={cycle} currency={currency} />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {upcoming.length > 0 ? (
         <Card>

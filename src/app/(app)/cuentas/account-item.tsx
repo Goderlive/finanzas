@@ -12,6 +12,8 @@ import type { Tables } from "@/lib/supabase/database.types";
 import { formatMoney } from "@/lib/money";
 import { accountTypeLabels } from "@/lib/labels";
 import { cn } from "@/lib/utils";
+import type { CreditCardCycle } from "@/lib/credit-cycle";
+import { CreditCycleSummary } from "@/components/credit-cycle-summary";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -26,10 +28,12 @@ export function AccountItem({
   account,
   ownerLabel,
   currency,
+  cycle,
 }: {
   account: Tables<"accounts">;
   ownerLabel: string;
   currency: string;
+  cycle?: CreditCardCycle;
 }) {
   const [editOpen, setEditOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -48,10 +52,11 @@ export function AccountItem({
   return (
     <div
       className={cn(
-        "flex items-center justify-between gap-2 rounded-lg border p-3",
+        "rounded-lg border p-3",
         account.is_archived && "opacity-60",
       )}
     >
+    <div className="flex items-center justify-between gap-2">
       <div className="min-w-0">
         <div className="truncate font-medium">{account.name}</div>
         <div className="text-xs text-muted-foreground">
@@ -99,6 +104,15 @@ export function AccountItem({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+    </div>
+
+      {cycle ? (
+        <CreditCycleSummary
+          cycle={cycle}
+          currency={currency}
+          className="mt-3 border-t pt-3"
+        />
+      ) : null}
 
       <AccountDialog
         account={account}

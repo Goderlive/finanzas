@@ -21,7 +21,7 @@ export default async function TransaccionesPage() {
       .limit(200),
     supabase
       .from("accounts")
-      .select("id, name, is_archived")
+      .select("id, name, is_archived, type, statement_day, payment_day")
       .order("created_at", { ascending: true }),
     supabase.from("categories").select("id, name, kind, parent_id, is_archived"),
     getSessionProfile(),

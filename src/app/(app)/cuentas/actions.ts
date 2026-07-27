@@ -13,7 +13,42 @@ function parseForm(formData: FormData) {
     type: formData.get("type"),
     ownership: formData.get("ownership"),
     initialBalance: formData.get("initialBalance") ?? "",
+    statementDay: formData.get("statementDay") ?? "",
+    paymentDay: formData.get("paymentDay") ?? "",
+    creditLimit: formData.get("creditLimit") ?? "",
   });
+}
+
+type CycleFields = {
+  statement_day: number | null;
+  payment_day: number | null;
+  credit_limit: number | null;
+};
+
+/**
+ * Campos de ciclo. Fuera de las tarjetas de crédito van siempre en null: la
+ * restricción `accounts_cycle_only_credit_card` lo exige en la base.
+ */
+function cycleFields(
+  data: ReturnType<typeof accountFormSchema.parse>,
+): CycleFields | { error: string } {
+  if (data.type !== "credit_card") {
+    return { statement_day: null, payment_day: null, credit_limit: null };
+  }
+  let limit: number | null = null;
+  if (data.creditLimit && data.creditLimit.length > 0) {
+    try {
+      limit = parseAmountToCents(data.creditLimit);
+    } catch {
+      return { error: "Límite de crédito inválido" };
+    }
+    if (limit < 0) return { error: "El límite no puede ser negativo" };
+  }
+  return {
+    statement_day: data.statementDay,
+    payment_day: data.paymentDay,
+    credit_limit: limit,
+  };
 }
 
 export async function createAccount(
@@ -32,6 +67,9 @@ export async function createAccount(
     return fail("Saldo inicial inválido");
   }
 
+  const cycle = cycleFields(parsed.data);
+  if ("error" in cycle) return fail(cycle.error);
+
   const { userId, householdId } = await requireHousehold();
   const supabase = await createClient();
   const { error } = await supabase.from("accounts").insert({
@@ -41,6 +79,7 @@ export async function createAccount(
     type: parsed.data.type,
     initial_balance: cents,
     created_by: userId,
+    ...cycle,
   });
   if (error) return fail(error.message);
 
@@ -68,6 +107,9 @@ export async function updateAccount(
     return fail("Saldo inicial inválido");
   }
 
+  const cycle = cycleFields(parsed.data);
+  if ("error" in cycle) return fail(cycle.error);
+
   const { userId } = await requireHousehold();
   const supabase = await createClient();
   const { error } = await supabase
@@ -77,6 +119,7 @@ export async function updateAccount(
       type: parsed.data.type,
       owner_id: parsed.data.ownership === "personal" ? userId : null,
       initial_balance: cents,
+      ...cycle,
     })
     .eq("id", id);
   if (error) return fail(error.message);

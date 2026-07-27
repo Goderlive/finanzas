@@ -22,9 +22,17 @@ import {
 } from "@/components/ui/select";
 import { SubmitButton } from "@/components/submit-button";
 import { DescriptionInput } from "./description-input";
+import { msiMonthOptions } from "./schema";
 import { createTransaction, updateTransaction } from "./actions";
 
-export type FormAccount = { id: string; name: string };
+export type FormAccount = {
+  id: string;
+  name: string;
+  // Presentes desde la Fase B; sin ellos no se puede ofrecer MSI.
+  type?: string;
+  statement_day?: number | null;
+  payment_day?: number | null;
+};
 export type FormCategory = {
   id: string;
   name: string;
@@ -69,6 +77,20 @@ export function TransactionForm({
   const [categoryId, setCategoryId] = useState<string>(
     transaction?.category_id ?? "none",
   );
+  const [accountId, setAccountId] = useState<string>(
+    transaction?.account_id ?? accounts[0]?.id ?? "",
+  );
+  const [msi, setMsi] = useState(false);
+  const [msiMonths, setMsiMonths] = useState("12");
+
+  // MSI sólo tiene sentido en un gasto nuevo con una tarjeta ya configurada.
+  const selectedAccount = accounts.find((a) => a.id === accountId);
+  const canUseMsi =
+    !isEdit &&
+    type === "expense" &&
+    selectedAccount?.type === "credit_card" &&
+    selectedAccount.statement_day != null &&
+    selectedAccount.payment_day != null;
 
   useEffect(() => {
     if (state.ok) {
@@ -152,10 +174,7 @@ export function TransactionForm({
         <Label htmlFor="accountId">
           {type === "transfer" ? "Desde la cuenta" : "Cuenta"}
         </Label>
-        <Select
-          name="accountId"
-          defaultValue={transaction?.account_id ?? accounts[0]?.id}
-        >
+        <Select name="accountId" value={accountId} onValueChange={setAccountId}>
           <SelectTrigger id="accountId">
             <SelectValue />
           </SelectTrigger>
@@ -212,6 +231,48 @@ export function TransactionForm({
           </Select>
         </div>
       )}
+
+      {/* Meses sin intereses */}
+      {canUseMsi ? (
+        <div className="space-y-3 rounded-lg border p-3">
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              name="msi"
+              checked={msi}
+              onChange={(e) => setMsi(e.target.checked)}
+              className="h-4 w-4 rounded border-input accent-foreground"
+            />
+            <span className="text-sm font-medium">¿Meses sin intereses?</span>
+          </label>
+
+          {msi ? (
+            <div className="space-y-2">
+              <Label htmlFor="msiMonths">Mensualidades</Label>
+              <Select
+                name="msiMonths"
+                value={msiMonths}
+                onValueChange={setMsiMonths}
+              >
+                <SelectTrigger id="msiMonths">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {msiMonthOptions.map((m) => (
+                    <SelectItem key={m} value={String(m)}>
+                      {m} meses
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                La compra se registra completa en su fecha real; el calendario
+                de mensualidades vive aparte, en Compromisos.
+              </p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Descripción con autocompletado */}
       <div className="space-y-2">

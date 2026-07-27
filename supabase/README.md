@@ -14,6 +14,39 @@ Migraciones versionadas para Supabase self-hosted (Coolify).
 | `20260723000006_functions_triggers.sql` | Helpers RLS, trigger de balance, `updated_at`, recálculo |
 | `20260723000007_rls_policies.sql` | RLS por hogar + visibilidad personal/conjunta |
 | `20260723000008_auth_onboarding.sql` | `handle_new_user`, `create_household`, `create_invitation`, `accept_invitation` |
+| `20260723000009_fix_invitation_fk.sql` | FK de invitaciones en cascada |
+| `20260726000010_credit_card_cycle.sql` | Ciclo de tarjeta en `accounts` + aritmética de cortes |
+| `20260726000011_installments.sql` | `installment_plans`, `installment_payments`, `households.msi_alert_pct` |
+| `20260726000012_fixed_investments.sql` | Renta fija en `investments` |
+| `20260726000013_investment_lots.sql` | `investment_lots` (compras parciales) |
+| `20260726000014_installment_rpc.sql` | `create_installment_plan` (genera el calendario MSI) |
+| `20260726000015_fixed_no_variable_fields.sql` | La renta fija no lleva cantidad ni precio unitario |
+| `20260726000016_allow_closed_positions.sql` | `investments.quantity >= 0` (posiciones vendidas por completo) |
+
+## Migrar con datos reales en producción
+
+La base ya está en uso. El procedimiento es:
+
+```bash
+./scripts/db-backup.sh                 # 1. backup completo + firma del esquema
+# 2. aplicar: pegar supabase/apply_20260726.sql en el SQL Editor de Supabase
+./scripts/db-verify-additive.sh backups/<stamp>/00_signature.txt   # 3. probar que fue aditiva
+```
+
+Si algo sale mal: `psql "$DATABASE_URL" -f supabase/rollback/20260726_down_all.sql`.
+
+El backup guarda en `backups/<timestamp>/` (ignorado por git):
+
+| Archivo | Para qué |
+|---|---|
+| `00_signature.txt` | firma del esquema, base de la verificación aditiva |
+| `01b_extensions.sql` | **imprescindible en un restore, va primero** (`citext` y `pg_trgm` viven en `public`) |
+| `05_full.dump` | artefacto real de restore (`pg_restore`) |
+| `03_data_public.sql` | datos como INSERTs, legibles y diffeables |
+
+Los `.sql` de datos deben restaurarse con los triggers desactivados
+(`set session_replication_role = replica;`), o `handle_new_user` duplica
+perfiles al recargar `auth.users`. El `05_full.dump` no tiene ese problema.
 
 ## Aplicar
 

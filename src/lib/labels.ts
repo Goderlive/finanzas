@@ -1,6 +1,8 @@
 import type {
   AccountType,
+  CompoundingMethod,
   DebtType,
+  InvestmentType,
   TransactionType,
 } from "@/lib/supabase/database.types";
 
@@ -17,6 +19,17 @@ export const transactionTypeLabels: Record<TransactionType, string> = {
   income: "Ingreso",
   expense: "Gasto",
   transfer: "Transferencia",
+};
+
+export const investmentTypeLabels: Record<InvestmentType, string> = {
+  fixed: "Renta fija",
+  variable: "Renta variable",
+};
+
+export const compoundingLabels: Record<CompoundingMethod, string> = {
+  simple: "Interés simple",
+  monthly: "Capitaliza cada mes",
+  daily: "Capitaliza diario",
 };
 
 export const debtTypeLabels: Record<DebtType, string> = {

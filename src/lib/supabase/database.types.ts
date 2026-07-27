@@ -23,6 +23,10 @@ export type SplitType = "equal" | "percentage" | "fixed";
 export type DebtType = "loan" | "credit_card" | "mortgage" | "other";
 export type MemberRole = "owner" | "member";
 export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
+export type InstallmentStatus = "active" | "completed" | "cancelled";
+export type InvestmentType = "fixed" | "variable";
+export type CompoundingMethod = "simple" | "monthly" | "daily";
+export type InvestmentLotType = "buy" | "sell";
 
 export interface Database {
   public: {
@@ -32,6 +36,7 @@ export interface Database {
           id: string;
           name: string;
           base_currency: string;
+          msi_alert_pct: number;
           created_at: string;
           updated_at: string;
         };
@@ -39,6 +44,7 @@ export interface Database {
           id?: string;
           name: string;
           base_currency?: string;
+          msi_alert_pct?: number;
           created_at?: string;
           updated_at?: string;
         };
@@ -106,6 +112,10 @@ export interface Database {
           initial_balance: number;
           current_balance: number;
           is_archived: boolean;
+          // Sólo para type = 'credit_card'; null en el resto.
+          statement_day: number | null;
+          payment_day: number | null;
+          credit_limit: number | null;
           created_by: string;
           created_at: string;
           updated_at: string;
@@ -120,6 +130,9 @@ export interface Database {
           initial_balance?: number;
           current_balance?: number;
           is_archived?: boolean;
+          statement_day?: number | null;
+          payment_day?: number | null;
+          credit_limit?: number | null;
           created_by: string;
           created_at?: string;
           updated_at?: string;
@@ -363,12 +376,21 @@ export interface Database {
           household_id: string;
           owner_id: string | null;
           account_id: string | null;
-          symbol: string;
+          investment_type: InvestmentType;
+          // Renta variable (null en renta fija).
+          symbol: string | null;
+          quantity: number | null;
+          purchase_price: number | null;
           name: string | null;
-          quantity: number;
-          purchase_price: number;
           purchase_date: string;
           currency: string;
+          // Renta fija (null en renta variable).
+          principal: number | null;
+          annual_rate: number | null;
+          start_date: string | null;
+          maturity_date: string | null;
+          compounding: CompoundingMethod | null;
+          reinvests_at_maturity: boolean | null;
           created_by: string;
           created_at: string;
           updated_at: string;
@@ -378,17 +400,116 @@ export interface Database {
           household_id: string;
           owner_id?: string | null;
           account_id?: string | null;
-          symbol: string;
+          investment_type?: InvestmentType;
+          symbol?: string | null;
           name?: string | null;
-          quantity: number;
-          purchase_price: number;
+          quantity?: number | null;
+          purchase_price?: number | null;
           purchase_date?: string;
           currency?: string;
+          principal?: number | null;
+          annual_rate?: number | null;
+          start_date?: string | null;
+          maturity_date?: string | null;
+          compounding?: CompoundingMethod | null;
+          reinvests_at_maturity?: boolean | null;
           created_by: string;
           created_at?: string;
           updated_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["investments"]["Insert"]>;
+        Relationships: [];
+      };
+      investment_lots: {
+        Row: {
+          id: string;
+          investment_id: string;
+          type: InvestmentLotType;
+          quantity: number;
+          price: number;
+          occurred_at: string;
+          note: string | null;
+          created_by: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          investment_id: string;
+          type?: InvestmentLotType;
+          quantity: number;
+          price: number;
+          occurred_at?: string;
+          note?: string | null;
+          created_by: string;
+          created_at?: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["investment_lots"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      installment_plans: {
+        Row: {
+          id: string;
+          household_id: string;
+          transaction_id: string;
+          total_amount: number;
+          months: number;
+          monthly_amount: number;
+          first_payment_date: string;
+          remaining_months: number;
+          status: InstallmentStatus;
+          created_by: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          household_id: string;
+          transaction_id: string;
+          total_amount: number;
+          months: number;
+          monthly_amount: number;
+          first_payment_date: string;
+          remaining_months: number;
+          status?: InstallmentStatus;
+          created_by: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["installment_plans"]["Insert"]
+        >;
+        Relationships: [];
+      };
+      installment_payments: {
+        Row: {
+          id: string;
+          plan_id: string;
+          installment_no: number;
+          due_date: string;
+          amount: number;
+          is_paid: boolean;
+          paid_at: string | null;
+          statement_period: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          plan_id: string;
+          installment_no: number;
+          due_date: string;
+          amount: number;
+          is_paid?: boolean;
+          paid_at?: string | null;
+          statement_period: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["installment_payments"]["Insert"]
+        >;
         Relationships: [];
       };
       price_snapshots: {
@@ -440,6 +561,10 @@ export interface Database {
         Args: { p_token: string };
         Returns: string;
       };
+      create_installment_plan: {
+        Args: { p_transaction_id: string; p_months: number };
+        Returns: string;
+      };
     };
     Enums: {
       account_type: AccountType;
@@ -449,6 +574,10 @@ export interface Database {
       debt_type: DebtType;
       member_role: MemberRole;
       invitation_status: InvitationStatus;
+      installment_status: InstallmentStatus;
+      investment_type: InvestmentType;
+      compounding_method: CompoundingMethod;
+      investment_lot_type: InvestmentLotType;
     };
     CompositeTypes: Record<never, never>;
   };

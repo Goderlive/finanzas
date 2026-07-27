@@ -16,12 +16,15 @@ function parseForm(formData: FormData) {
     categoryId: formData.get("categoryId") ?? undefined,
     description: formData.get("description") ?? undefined,
     occurredAt: formData.get("occurredAt"),
+    msi: formData.get("msi") ?? undefined,
+    msiMonths: formData.get("msiMonths") ?? undefined,
   });
 }
 
 function revalidateAll() {
   revalidatePath("/transacciones");
   revalidatePath("/cuentas");
+  revalidatePath("/compromisos");
   revalidatePath("/");
 }
 
@@ -39,7 +42,10 @@ type Prepared = {
 
 async function prepare(
   formData: FormData,
-): Promise<{ ok: true; row: Prepared } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; row: Prepared; msiMonths: number | null }
+  | { ok: false; error: string }
+> {
   const parsed = parseForm(formData);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
@@ -63,6 +69,7 @@ async function prepare(
 
   return {
     ok: true,
+    msiMonths: parsed.data.msi ? parsed.data.msiMonths : null,
     row: {
       household_id: householdId,
       account_id: parsed.data.accountId,
@@ -87,8 +94,27 @@ export async function createTransaction(
   if (!prep.ok) return fail(prep.error);
 
   const supabase = await createClient();
-  const { error } = await supabase.from("transactions").insert(prep.row);
+  const { data, error } = await supabase
+    .from("transactions")
+    .insert(prep.row)
+    .select("id")
+    .single();
   if (error) return fail(error.message);
+
+  if (prep.msiMonths !== null) {
+    // El calendario lo genera la base (create_installment_plan): ahí viven la
+    // aritmética de cortes y el reparto del centavo sobrante.
+    const { error: msiError } = await supabase.rpc("create_installment_plan", {
+      p_transaction_id: data.id,
+      p_months: prep.msiMonths,
+    });
+    if (msiError) {
+      // Sin plan la compra quedaría registrada como un cargo normal, que no es
+      // lo que se pidió: se revierte para no dejar el dato a medias.
+      await supabase.from("transactions").delete().eq("id", data.id);
+      return fail(msiError.message);
+    }
+  }
 
   revalidateAll();
   return OK;
@@ -105,6 +131,33 @@ export async function updateTransaction(
   if (!prep.ok) return fail(prep.error);
 
   const supabase = await createClient();
+
+  // Si la compra tiene plan MSI, su calendario se calculó a partir del monto,
+  // la fecha y la tarjeta. Cambiar cualquiera de los tres lo dejaría mintiendo,
+  // y regenerarlo en silencio borraría las mensualidades ya marcadas pagadas.
+  const { data: plan } = await supabase
+    .from("installment_plans")
+    .select("id")
+    .eq("transaction_id", id)
+    .maybeSingle();
+  if (plan) {
+    const { data: before } = await supabase
+      .from("transactions")
+      .select("amount, occurred_at, account_id")
+      .eq("id", id)
+      .single();
+    if (
+      before &&
+      (before.amount !== prep.row.amount ||
+        before.occurred_at !== prep.row.occurred_at ||
+        before.account_id !== prep.row.account_id)
+    ) {
+      return fail(
+        "Esta compra está a meses sin intereses. Cancela el plan antes de cambiar el monto, la fecha o la tarjeta.",
+      );
+    }
+  }
+
   // No se cambian household_id ni created_by al editar.
   const { error } = await supabase
     .from("transactions")

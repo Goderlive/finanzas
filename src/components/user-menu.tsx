@@ -3,6 +3,7 @@
 import Link from "next/link";
 import {
   BarChart3,
+  CalendarRange,
   CreditCard,
   Home,
   LogOut,
@@ -55,6 +56,12 @@ export function UserMenu({
           <Link href="/presupuestos" className="flex w-full items-center gap-2">
             <PieChart className="h-4 w-4" />
             Presupuestos
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/compromisos" className="flex w-full items-center gap-2">
+            <CalendarRange className="h-4 w-4" />
+            Compromisos
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>

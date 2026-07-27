@@ -8,7 +8,7 @@ export default async function NuevaTransaccionPage() {
   const [{ data: accounts }, { data: categories }] = await Promise.all([
     supabase
       .from("accounts")
-      .select("id, name")
+      .select("id, name, type, statement_day, payment_day")
       .eq("is_archived", false)
       .order("created_at", { ascending: true }),
     supabase

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { Tables } from "@/lib/supabase/database.types";
 import type { ActionResult } from "@/lib/action-result";
@@ -36,6 +36,8 @@ export function AccountDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const isEdit = Boolean(account);
+  const [type, setType] = useState(account?.type ?? "checking");
+  const isCard = type === "credit_card";
   const [state, formAction] = useActionState<ActionResult, FormData>(
     isEdit ? updateAccount : createAccount,
     { ok: false },
@@ -74,7 +76,11 @@ export function AccountDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label htmlFor="type">Tipo</Label>
-              <Select name="type" defaultValue={account?.type ?? "checking"}>
+              <Select
+                name="type"
+                value={type}
+                onValueChange={(v) => setType(v as typeof type)}
+              >
                 <SelectTrigger id="type">
                   <SelectValue />
                 </SelectTrigger>
@@ -119,6 +125,63 @@ export function AccountDialog({
               El saldo actual se recalcula con tus movimientos.
             </p>
           </div>
+
+          {isCard ? (
+            <fieldset className="space-y-3 rounded-lg border p-3">
+              <legend className="px-1 text-xs font-medium text-muted-foreground">
+                Ciclo de la tarjeta
+              </legend>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="statementDay">Día de corte</Label>
+                  <Input
+                    id="statementDay"
+                    name="statementDay"
+                    inputMode="numeric"
+                    min={1}
+                    max={31}
+                    type="number"
+                    placeholder="20"
+                    defaultValue={account?.statement_day ?? ""}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="paymentDay">Día límite de pago</Label>
+                  <Input
+                    id="paymentDay"
+                    name="paymentDay"
+                    inputMode="numeric"
+                    min={1}
+                    max={31}
+                    type="number"
+                    placeholder="5"
+                    defaultValue={account?.payment_day ?? ""}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="creditLimit">Límite de crédito</Label>
+                <Input
+                  id="creditLimit"
+                  name="creditLimit"
+                  inputMode="decimal"
+                  placeholder="50000.00"
+                  defaultValue={
+                    account?.credit_limit != null
+                      ? centsToInput(account.credit_limit)
+                      : ""
+                  }
+                />
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Si el día de pago es igual o anterior al de corte, el pago cae
+                el mes siguiente. Los meses cortos usan su último día.
+              </p>
+            </fieldset>
+          ) : null}
 
           {state.error ? (
             <p className="text-sm text-destructive">{state.error}</p>
