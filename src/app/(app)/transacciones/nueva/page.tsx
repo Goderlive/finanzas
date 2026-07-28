@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { NewTransaction } from "../new-transaction";
+import { today } from "@/lib/dates";
 
 export default async function NuevaTransaccionPage() {
   const supabase = await createClient();
@@ -18,7 +19,7 @@ export default async function NuevaTransaccionPage() {
       .order("name", { ascending: true }),
   ]);
 
-  const today = new Date().toLocaleDateString("en-CA");
+  const defaultDate = today();
 
   return (
     <div className="space-y-4">
@@ -35,7 +36,7 @@ export default async function NuevaTransaccionPage() {
       <NewTransaction
         accounts={accounts ?? []}
         categories={categories ?? []}
-        defaultDate={today}
+        defaultDate={defaultDate}
       />
     </div>
   );

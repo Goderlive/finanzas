@@ -162,7 +162,10 @@ export function TransactionForm({
           name="amount"
           inputMode="decimal"
           autoFocus={!isEdit}
-          defaultValue={transaction ? centsToInput(transaction.amount) : ""}
+          // El formulario captura magnitudes; el signo lo pone la acción.
+          defaultValue={
+            transaction ? centsToInput(Math.abs(transaction.amount)) : ""
+          }
           placeholder="0.00"
           className="h-12 text-2xl"
           required

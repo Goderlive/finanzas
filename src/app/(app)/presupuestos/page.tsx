@@ -51,7 +51,8 @@ export default async function PresupuestosPage({
   for (const t of txns ?? []) {
     if (!t.category_id) continue;
     const bucket = t.occurred_at >= monthFirst ? spentCur : spentPrev;
-    bucket[t.category_id] = (bucket[t.category_id] ?? 0) + t.amount;
+    // El gasto se guarda en negativo; el presupuesto se mide en magnitud.
+    bucket[t.category_id] = (bucket[t.category_id] ?? 0) + Math.abs(t.amount);
   }
   const prevAmountByCat = new Map(
     (prevBudgets ?? []).map((b) => [b.category_id, b.amount]),

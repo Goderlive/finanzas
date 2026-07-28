@@ -31,17 +31,16 @@ import { Amount } from "@/components/amount";
 import { PrivacyToggle } from "@/components/privacy";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { addDays, today, todayDate } from "@/lib/dates";
 
 export default async function HomePage() {
   const supabase = await createClient();
 
-  const now = new Date();
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const todayIso = today();
+  const monthStart = `${todayIso.slice(0, 7)}-01`;
   // El periodo en curso de una tarjeta nunca pasa de 31 días; con 100 sobra
   // para reconstruirlo sin traerse el histórico completo.
-  const cycleWindow = new Date(now);
-  cycleWindow.setDate(cycleWindow.getDate() - 100);
-  const cycleStart = `${cycleWindow.getFullYear()}-${String(cycleWindow.getMonth() + 1).padStart(2, "0")}-${String(cycleWindow.getDate()).padStart(2, "0")}`;
+  const cycleStart = addDays(todayIso, -100);
 
   const [
     { data: accounts },
@@ -61,12 +60,12 @@ export default async function HomePage() {
     supabase
       .from("accounts")
       .select(
-        "id, name, type, current_balance, statement_day, payment_day, credit_limit",
+        "id, name, type, account_class, current_balance, statement_day, payment_day, credit_limit, minimum_payment",
       )
       .eq("is_archived", false),
     supabase
       .from("transactions")
-      .select("id, account_id, transfer_account_id, type, amount, occurred_at")
+      .select("id, account_id, type, amount, occurred_at")
       .gte("occurred_at", cycleStart),
     supabase
       .from("installment_plans")
@@ -122,6 +121,10 @@ export default async function HomePage() {
     settlements ?? [],
   );
   // Patrimonio neto = cuentas + inversiones − deudas.
+  //
+  // La parte de cuentas es una suma simple, sin condicionales por tipo: los
+  // pasivos ya vienen en negativo por la regla de signo (migración 0018), así
+  // que las tarjetas restan solas.
   const accountsTotal = (accounts ?? []).reduce(
     (s, a) => s + a.current_balance,
     0,
@@ -196,9 +199,9 @@ export default async function HomePage() {
       account: a,
       cycle: computeCreditCardCycle(
         a,
-        cardMovementList.filter(
-          (m) => m.account_id === a.id || m.transfer_account_id === a.id,
-        ),
+        // Un traspaso tiene una fila por cuenta, así que cada tarjeta sólo
+        // mira los asientos cuyo account_id es el suyo.
+        cardMovementList.filter((m) => m.account_id === a.id),
         plansByCard.get(a.id) ?? [],
       ),
     }))
@@ -231,9 +234,9 @@ export default async function HomePage() {
   const upcoming = (debts ?? [])
     .filter((d) => d.due_day)
     .map((d) => {
-      const t = new Date();
+      const t = todayDate();
       const due = new Date(t.getFullYear(), t.getMonth(), d.due_day!);
-      if (due < new Date(t.getFullYear(), t.getMonth(), t.getDate())) {
+      if (due < t) {
         due.setMonth(due.getMonth() + 1);
       }
       return { name: d.name, due };
@@ -241,12 +244,16 @@ export default async function HomePage() {
     .sort((a, b) => a.due.getTime() - b.due.getTime())
     .slice(0, 3);
 
+  // Ingresos y gastos del mes. Los traspasos (type = 'transfer') quedan
+  // fuera por construcción: mover dinero entre cuentas propias no es ni
+  // ingreso ni gasto. `amount` viene con signo, así que el gasto se muestra
+  // en magnitud.
   const income = (monthTx ?? [])
     .filter((t) => t.type === "income")
     .reduce((s, t) => s + t.amount, 0);
   const expense = (monthTx ?? [])
     .filter((t) => t.type === "expense")
-    .reduce((s, t) => s + t.amount, 0);
+    .reduce((s, t) => s + Math.abs(t.amount), 0);
   const flow = income - expense;
 
   // Presupuesto consumido del mes (con roll-up de subcategorías).
@@ -254,7 +261,8 @@ export default async function HomePage() {
   const spentMap: SpentMap = {};
   for (const t of monthTx ?? []) {
     if (t.type === "expense" && t.category_id) {
-      spentMap[t.category_id] = (spentMap[t.category_id] ?? 0) + t.amount;
+      spentMap[t.category_id] =
+        (spentMap[t.category_id] ?? 0) + Math.abs(t.amount);
     }
   }
   const children = childrenMap(categories ?? []);

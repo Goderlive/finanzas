@@ -22,6 +22,7 @@ import {
 import { CommitmentChart } from "./commitment-chart";
 import { PlanItem } from "./plan-item";
 import { ThresholdDialog } from "./threshold-dialog";
+import { today } from "@/lib/dates";
 
 export default async function CompromisosPage() {
   const supabase = await createClient();
@@ -67,7 +68,7 @@ export default async function CompromisosPage() {
   const paymentList = payments ?? [];
   const purchaseById = new Map((purchases ?? []).map((t) => [t.id, t]));
 
-  const currentMonth = monthOf(new Date().toLocaleDateString("en-CA"));
+  const currentMonth = monthOf(today());
   const monthlyIncome = averageMonthlyIncome(incomes ?? [], currentMonth);
   const projection = projectCommitments(
     paymentList as CommitmentInstallment[],

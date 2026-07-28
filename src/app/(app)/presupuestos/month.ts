@@ -1,5 +1,7 @@
 // Utilidades de mes. Un "mes" se representa como el primer día: "YYYY-MM-01".
 
+import { todayDate } from "@/lib/dates";
+
 export function firstOfMonth(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
@@ -8,7 +10,7 @@ export function firstOfMonth(d: Date): string {
 export function parseMonthParam(m?: string): string {
   if (m && /^\d{4}-\d{2}$/.test(m)) return `${m}-01`;
   if (m && /^\d{4}-\d{2}-01$/.test(m)) return m;
-  return firstOfMonth(new Date());
+  return firstOfMonth(todayDate());
 }
 
 export function addMonths(monthFirst: string, delta: number): string {

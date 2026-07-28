@@ -15,6 +15,7 @@ import { computeBalance, type Member } from "./balance";
 import { SharedActions } from "./shared-actions";
 import { ExpenseItem } from "./expense-item";
 import { SettlementItem } from "./settlement-item";
+import { today } from "@/lib/dates";
 
 export default async function CompartidosPage() {
   const supabase = await createClient();
@@ -83,7 +84,7 @@ export default async function CompartidosPage() {
   const settleTo = balance.creditor?.id ?? members[1].id;
   const settleAmount = balance.amount > 0 ? centsToInput(balance.amount) : "";
 
-  const today = new Date().toLocaleDateString("en-CA");
+  const defaultDate = today();
 
   return (
     <div className="space-y-5">
@@ -113,7 +114,7 @@ export default async function CompartidosPage() {
           <SharedActions
             members={members}
             defaultPaidBy={defaultPaidBy}
-            defaultDate={today}
+            defaultDate={defaultDate}
             settleFrom={settleFrom}
             settleTo={settleTo}
             settleAmount={settleAmount}
