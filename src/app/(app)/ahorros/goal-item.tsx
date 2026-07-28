@@ -17,6 +17,7 @@ import { ProgressBar } from "@/components/progress-bar";
 import { GoalDialog } from "./goal-dialog";
 import { ContributeDialog } from "./contribute-dialog";
 import { deleteGoal } from "./actions";
+import { todayDate } from "@/lib/dates";
 
 function safeCents(v: string): number {
   try {
@@ -27,14 +28,14 @@ function safeCents(v: string): number {
 }
 
 function addMonths(months: number): string {
-  const d = new Date();
+  const d = todayDate();
   d.setMonth(d.getMonth() + months);
   return d.toLocaleDateString("es-MX", { month: "short", year: "numeric" });
 }
 
 function monthsUntil(dateStr: string): number {
   const target = new Date(`${dateStr}T00:00:00`);
-  const now = new Date();
+  const now = todayDate();
   return (
     (target.getFullYear() - now.getFullYear()) * 12 +
     (target.getMonth() - now.getMonth())

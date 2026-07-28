@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getSessionProfile } from "@/lib/auth";
 import { getHousehold, getHouseholdMembers } from "@/lib/household";
 import { TransactionsView } from "./transactions-view";
+import { today } from "@/lib/dates";
 
 export default async function TransaccionesPage() {
   const supabase = await createClient();
@@ -55,7 +56,7 @@ export default async function TransaccionesPage() {
       parent_id: c.parent_id,
     }));
 
-  const today = new Date().toLocaleDateString("en-CA");
+  const defaultDate = today();
 
   return (
     <div className="space-y-4">
@@ -68,7 +69,7 @@ export default async function TransaccionesPage() {
         categoryNames={categoryNames}
         memberNames={memberNames}
         currency={currency}
-        defaultDate={today}
+        defaultDate={defaultDate}
         currentUserId={session?.user.id ?? ""}
         householdId={household?.id ?? ""}
       />

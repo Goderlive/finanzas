@@ -14,6 +14,7 @@ import {
   MemberComparison,
   MonthlyTrend,
 } from "./charts";
+import { todayDate } from "@/lib/dates";
 
 function shortMonth(monthFirst: string): string {
   const [y, mo] = monthFirst.split("-").map(Number);
@@ -21,7 +22,7 @@ function shortMonth(monthFirst: string): string {
 }
 
 export default async function ReportesPage() {
-  const currentFirst = firstOfMonth(new Date());
+  const currentFirst = firstOfMonth(todayDate());
   const windowStart = addMonths(currentFirst, -5);
   const nextFirst = addMonths(currentFirst, 1);
 

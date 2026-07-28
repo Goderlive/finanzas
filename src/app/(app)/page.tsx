@@ -31,17 +31,16 @@ import { Amount } from "@/components/amount";
 import { PrivacyToggle } from "@/components/privacy";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { addDays, today, todayDate } from "@/lib/dates";
 
 export default async function HomePage() {
   const supabase = await createClient();
 
-  const now = new Date();
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const todayIso = today();
+  const monthStart = `${todayIso.slice(0, 7)}-01`;
   // El periodo en curso de una tarjeta nunca pasa de 31 días; con 100 sobra
   // para reconstruirlo sin traerse el histórico completo.
-  const cycleWindow = new Date(now);
-  cycleWindow.setDate(cycleWindow.getDate() - 100);
-  const cycleStart = `${cycleWindow.getFullYear()}-${String(cycleWindow.getMonth() + 1).padStart(2, "0")}-${String(cycleWindow.getDate()).padStart(2, "0")}`;
+  const cycleStart = addDays(todayIso, -100);
 
   const [
     { data: accounts },
@@ -235,9 +234,9 @@ export default async function HomePage() {
   const upcoming = (debts ?? [])
     .filter((d) => d.due_day)
     .map((d) => {
-      const t = new Date();
+      const t = todayDate();
       const due = new Date(t.getFullYear(), t.getMonth(), d.due_day!);
-      if (due < new Date(t.getFullYear(), t.getMonth(), t.getDate())) {
+      if (due < t) {
         due.setMonth(due.getMonth() + 1);
       }
       return { name: d.name, due };

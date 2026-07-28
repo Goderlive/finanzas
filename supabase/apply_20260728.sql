@@ -31,6 +31,7 @@
 
 alter type public.account_type add value if not exists 'loan';
 
+
 -- ============================================================
 -- 20260728000018_account_class.sql
 -- ============================================================
@@ -99,6 +100,7 @@ $$;
 
 comment on function public.household_net_worth(uuid) is
   'Patrimonio neto aportado por las cuentas: suma simple de current_balance. Los pasivos ya vienen en negativo.';
+
 
 -- ============================================================
 -- 20260728000019_signed_amounts_transfers.sql
@@ -508,6 +510,7 @@ $$;
 -- ---------------------------------------------------------------------
 select public.recalculate_account_balance(id) from public.accounts;
 
+
 -- ============================================================
 -- 20260728000020_card_payment.sql
 -- ============================================================
@@ -521,6 +524,24 @@ select public.recalculate_account_balance(id) from public.accounts;
 -- nace ninguno, cosa que dos INSERT sueltos desde el cliente no pueden
 -- prometer.
 -- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- "Hoy" según el hogar, no según el servidor
+--
+-- La base corre en UTC. `current_date` cambia de día a las 18:00 hora de
+-- México, así que un pago hecho por la noche se guardaba con la fecha del
+-- día siguiente y podía caer del otro lado del corte. Todo default de
+-- fecha de este archivo pasa por aquí.
+--
+-- El gemelo en TypeScript es `today()` en src/lib/dates.ts.
+-- ---------------------------------------------------------------------
+create or replace function public.household_today()
+returns date language sql stable as $$
+  select (now() at time zone 'America/Mexico_City')::date;
+$$;
+
+comment on function public.household_today() is
+  'Fecha de hoy en la zona del hogar (America/Mexico_City). Usar en lugar de current_date.';
 
 -- Pago mínimo del corte, si el banco lo informa. Sólo aplica a tarjetas.
 alter table public.accounts
@@ -550,7 +571,7 @@ create or replace function public.create_transfer(
   p_from_account uuid,
   p_to_account   uuid,
   p_amount       bigint,          -- centavos, SIEMPRE positivo
-  p_occurred_at  date default current_date,
+  p_occurred_at  date default public.household_today(),
   p_description  text default null
 ) returns uuid                     -- transfer_group_id
 language plpgsql security definer set search_path = public as $$
@@ -629,7 +650,7 @@ $$;
 -- Estado del ciclo de una tarjeta a una fecha dada.
 create or replace function public.credit_card_cycle(
   p_card uuid,
-  p_now  date default current_date
+  p_now  date default public.household_today()
 ) returns table (
   configured      boolean,
   last_close      date,
@@ -709,7 +730,7 @@ create or replace function public.pay_credit_card(
   p_from_account uuid,
   p_card         uuid,
   p_amount       bigint,          -- centavos, positivo
-  p_occurred_at  date default current_date,
+  p_occurred_at  date default public.household_today(),
   p_description  text default null
 ) returns jsonb
 language plpgsql security definer set search_path = public as $$

@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { simulatePayoff } from "./simulate";
+import { todayDate } from "@/lib/dates";
 
 function safeCents(v: string): number {
   try {
@@ -33,7 +34,7 @@ function monthsLabel(months: number): string {
 
 function payoffDate(months: number): string {
   if (!Number.isFinite(months)) return "—";
-  const d = new Date();
+  const d = todayDate();
   d.setMonth(d.getMonth() + months);
   return d.toLocaleDateString("es-MX", { month: "short", year: "numeric" });
 }

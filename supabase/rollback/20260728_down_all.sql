@@ -50,6 +50,7 @@ drop function if exists public.sync_transfer_sibling();
 drop function if exists public.cascade_transfer_delete();
 drop function if exists public.recalculate_all_balances();
 drop function if exists public.household_net_worth(uuid);
+drop function if exists public.household_today();
 
 alter table public.transactions
   drop constraint if exists transactions_amount_nonzero,

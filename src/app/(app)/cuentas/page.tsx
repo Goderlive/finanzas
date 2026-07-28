@@ -10,6 +10,7 @@ import {
 } from "@/lib/credit-cycle";
 import { NewAccountButton } from "./new-account-button";
 import { AccountItem } from "./account-item";
+import { today } from "@/lib/dates";
 
 export default async function AccountsPage() {
   const supabase = await createClient();
@@ -64,8 +65,7 @@ export default async function AccountsPage() {
       name: a.name,
       current_balance: a.current_balance,
     }));
-  const today = new Date();
-  const defaultDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const defaultDate = today();
 
   // Ciclo de cada tarjeta de crédito, corregido por las compras a MSI.
   const movementList = (movements ?? []) as CycleMovement[];

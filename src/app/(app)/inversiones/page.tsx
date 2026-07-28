@@ -12,7 +12,7 @@ import {
   type HoldingReturn,
   type Lot,
 } from "@/lib/portfolio";
-import { formatLongDate } from "@/lib/dates";
+import { formatLongDate, today } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import { Amount } from "@/components/amount";
 import { PrivacyToggle } from "@/components/privacy";
@@ -65,7 +65,7 @@ export default async function InversionesPage() {
     }
   }
 
-  const todayIso = new Date().toLocaleDateString("en-CA");
+  const todayIso = today();
   const all = investments ?? [];
   const variable = all.filter((i) => i.investment_type === "variable");
   const fixed = all.filter((i) => i.investment_type === "fixed");

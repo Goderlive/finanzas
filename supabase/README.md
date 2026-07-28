@@ -104,6 +104,25 @@ edición al hermano vía trigger.
 genérico. Reparte el importe en el orden MSI vencidas → saldo del corte →
 periodo en curso, y marca las `installment_payments` cubiertas.
 
+## Regla de zona horaria
+
+La base y el servidor de Next.js corren en **UTC**, pero el hogar vive en
+México (UTC−6). Sin corregirlo, a partir de las 18:00 hora local ambos ya
+creen que es el día siguiente: un movimiento capturado por la noche se
+guardaba con la fecha de mañana y podía caer del otro lado del corte de una
+tarjeta.
+
+Nada de código nuevo debe preguntar la fecha de hoy por su cuenta:
+
+| Capa | Usar | En vez de |
+|---|---|---|
+| SQL | `public.household_today()` | `current_date` |
+| TypeScript, como `"YYYY-MM-DD"` | `today()` de `@/lib/dates` | `new Date().toLocaleDateString("en-CA")` |
+| TypeScript, como `Date` | `todayDate()` de `@/lib/dates` | `new Date()` |
+
+La zona está en un solo lugar por capa: la constante `HOUSEHOLD_TIME_ZONE`
+en `src/lib/dates.ts` y el literal dentro de `household_today()`.
+
 ## Aplicar el lote 20260728
 
 ```bash
