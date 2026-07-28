@@ -34,18 +34,34 @@ type Prepared = {
   transfer_account_id: string | null;
   category_id: string | null;
   type: "income" | "expense" | "transfer";
+  /** Ya con signo: ingreso positivo, gasto negativo. */
   amount: number;
   description: string | null;
   occurred_at: string;
   created_by: string;
 };
 
-async function prepare(
-  formData: FormData,
-): Promise<
-  | { ok: true; row: Prepared; msiMonths: number | null }
-  | { ok: false; error: string }
-> {
+/**
+ * El formulario captura una magnitud; el signo se pone aquí, una sola vez,
+ * según la regla del proyecto: `amount` es el efecto sobre el saldo de la
+ * cuenta y sobre el patrimonio neto.
+ */
+function signedAmount(cents: number, type: Prepared["type"]): number {
+  return type === "expense" ? -cents : cents;
+}
+
+type PreparedResult =
+  | {
+      ok: true;
+      row: Prepared;
+      msiMonths: number | null;
+      /** Magnitud capturada, para los traspasos que van por RPC. */
+      magnitude: number;
+      transferTo: string | null;
+    }
+  | { ok: false; error: string };
+
+async function prepare(formData: FormData): Promise<PreparedResult> {
   const parsed = parseForm(formData);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
@@ -60,6 +76,23 @@ async function prepare(
   if (cents <= 0) return { ok: false, error: "El monto debe ser mayor a cero" };
 
   const isTransfer = parsed.data.type === "transfer";
+  const transferTo =
+    isTransfer && parsed.data.transferAccountId !== "none"
+      ? (parsed.data.transferAccountId ?? null)
+      : null;
+
+  if (isTransfer && !transferTo) {
+    return { ok: false, error: "Elige una cuenta destino" };
+  }
+  if (isTransfer && transferTo === parsed.data.accountId) {
+    return {
+      ok: false,
+      error: "El origen y el destino deben ser cuentas distintas",
+    };
+  }
+
+  // Un traspaso nunca lleva categoría de gasto: no es consumo, sólo mueve
+  // dinero entre cuentas propias. La base lo exige además con un check.
   const categoryId =
     !isTransfer && parsed.data.categoryId && parsed.data.categoryId !== "none"
       ? parsed.data.categoryId
@@ -70,15 +103,18 @@ async function prepare(
   return {
     ok: true,
     msiMonths: parsed.data.msi ? parsed.data.msiMonths : null,
+    magnitude: cents,
+    transferTo,
     row: {
       household_id: householdId,
       account_id: parsed.data.accountId,
-      transfer_account_id: isTransfer
-        ? (parsed.data.transferAccountId ?? null)
-        : null,
+      transfer_account_id: transferTo,
       category_id: categoryId,
       type: parsed.data.type,
-      amount: cents,
+      // El asiento de origen de un traspaso sale de la cuenta: negativo.
+      amount: isTransfer
+        ? -cents
+        : signedAmount(cents, parsed.data.type),
       description: parsed.data.description || null,
       occurred_at: parsed.data.occurredAt,
       created_by: userId,
@@ -94,6 +130,24 @@ export async function createTransaction(
   if (!prep.ok) return fail(prep.error);
 
   const supabase = await createClient();
+
+  // Un traspaso son dos asientos que tienen que nacer juntos. Dos INSERT
+  // sueltos desde aquí no pueden prometerlo, así que va por la función de
+  // la base, que los escribe en una sola transacción.
+  if (prep.row.type === "transfer") {
+    const { error } = await supabase.rpc("create_transfer", {
+      p_from_account: prep.row.account_id,
+      p_to_account: prep.transferTo!,
+      p_amount: prep.magnitude,
+      p_occurred_at: prep.row.occurred_at,
+      p_description: prep.row.description,
+    });
+    if (error) return fail(error.message);
+
+    revalidateAll();
+    return OK;
+  }
+
   const { data, error } = await supabase
     .from("transactions")
     .insert(prep.row)
@@ -158,6 +212,33 @@ export async function updateTransaction(
     }
   }
 
+  // Cambiar de/a traspaso reescribiría la forma de la fila y dejaría un
+  // asiento hermano huérfano o faltante. Es más honesto pedir que se borre
+  // y se vuelva a capturar.
+  const { data: current } = await supabase
+    .from("transactions")
+    .select("type, transfer_group_id, amount")
+    .eq("id", id)
+    .single();
+  const wasTransfer = current?.type === "transfer";
+  const willBeTransfer = prep.row.type === "transfer";
+  if (wasTransfer !== willBeTransfer) {
+    return fail(
+      wasTransfer
+        ? "Un traspaso no se puede convertir en gasto o ingreso. Bórralo y captúralo de nuevo."
+        : "Para convertirlo en traspaso, bórralo y captúralo como traspaso.",
+    );
+  }
+
+  // En un traspaso sólo se edita este asiento: el trigger
+  // transactions_transfer_sync arrastra al hermano (monto, fecha,
+  // descripción y contraparte). Se conserva el signo del lado que se está
+  // editando para no invertir la dirección sin querer.
+  const amount =
+    willBeTransfer && (current?.amount ?? 0) > 0
+      ? Math.abs(prep.row.amount)
+      : prep.row.amount;
+
   // No se cambian household_id ni created_by al editar.
   const { error } = await supabase
     .from("transactions")
@@ -166,7 +247,7 @@ export async function updateTransaction(
       transfer_account_id: prep.row.transfer_account_id,
       category_id: prep.row.category_id,
       type: prep.row.type,
-      amount: prep.row.amount,
+      amount,
       description: prep.row.description,
       occurred_at: prep.row.occurred_at,
     })
@@ -177,6 +258,11 @@ export async function updateTransaction(
   return OK;
 }
 
+/**
+ * Borra un movimiento. Si es un lado de un traspaso, el trigger
+ * `transactions_transfer_delete` se lleva también al hermano: no puede
+ * quedar medio traspaso.
+ */
 export async function deleteTransaction(id: string): Promise<ActionResult> {
   await requireHousehold();
   const supabase = await createClient();

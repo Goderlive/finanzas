@@ -12,6 +12,7 @@ export const accountTypeLabels: Record<AccountType, string> = {
   cash: "Efectivo",
   credit_card: "Tarjeta de crédito",
   investment: "Inversión",
+  loan: "Préstamo",
   other: "Otra",
 };
 

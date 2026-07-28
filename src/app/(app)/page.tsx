@@ -61,12 +61,12 @@ export default async function HomePage() {
     supabase
       .from("accounts")
       .select(
-        "id, name, type, current_balance, statement_day, payment_day, credit_limit",
+        "id, name, type, account_class, current_balance, statement_day, payment_day, credit_limit, minimum_payment",
       )
       .eq("is_archived", false),
     supabase
       .from("transactions")
-      .select("id, account_id, transfer_account_id, type, amount, occurred_at")
+      .select("id, account_id, type, amount, occurred_at")
       .gte("occurred_at", cycleStart),
     supabase
       .from("installment_plans")
@@ -122,6 +122,10 @@ export default async function HomePage() {
     settlements ?? [],
   );
   // Patrimonio neto = cuentas + inversiones − deudas.
+  //
+  // La parte de cuentas es una suma simple, sin condicionales por tipo: los
+  // pasivos ya vienen en negativo por la regla de signo (migración 0018), así
+  // que las tarjetas restan solas.
   const accountsTotal = (accounts ?? []).reduce(
     (s, a) => s + a.current_balance,
     0,
@@ -196,9 +200,9 @@ export default async function HomePage() {
       account: a,
       cycle: computeCreditCardCycle(
         a,
-        cardMovementList.filter(
-          (m) => m.account_id === a.id || m.transfer_account_id === a.id,
-        ),
+        // Un traspaso tiene una fila por cuenta, así que cada tarjeta sólo
+        // mira los asientos cuyo account_id es el suyo.
+        cardMovementList.filter((m) => m.account_id === a.id),
         plansByCard.get(a.id) ?? [],
       ),
     }))
@@ -241,12 +245,16 @@ export default async function HomePage() {
     .sort((a, b) => a.due.getTime() - b.due.getTime())
     .slice(0, 3);
 
+  // Ingresos y gastos del mes. Los traspasos (type = 'transfer') quedan
+  // fuera por construcción: mover dinero entre cuentas propias no es ni
+  // ingreso ni gasto. `amount` viene con signo, así que el gasto se muestra
+  // en magnitud.
   const income = (monthTx ?? [])
     .filter((t) => t.type === "income")
     .reduce((s, t) => s + t.amount, 0);
   const expense = (monthTx ?? [])
     .filter((t) => t.type === "expense")
-    .reduce((s, t) => s + t.amount, 0);
+    .reduce((s, t) => s + Math.abs(t.amount), 0);
   const flow = income - expense;
 
   // Presupuesto consumido del mes (con roll-up de subcategorías).
@@ -254,7 +262,8 @@ export default async function HomePage() {
   const spentMap: SpentMap = {};
   for (const t of monthTx ?? []) {
     if (t.type === "expense" && t.category_id) {
-      spentMap[t.category_id] = (spentMap[t.category_id] ?? 0) + t.amount;
+      spentMap[t.category_id] =
+        (spentMap[t.category_id] ?? 0) + Math.abs(t.amount);
     }
   }
   const children = childrenMap(categories ?? []);

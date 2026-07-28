@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireHousehold } from "@/lib/auth";
 import { parseAmountToCents } from "@/lib/money";
 import { fail, OK, type ActionResult } from "@/lib/action-result";
-import { accountFormSchema } from "./schema";
+import { accountFormSchema, isLiabilityType } from "./schema";
 
 function parseForm(formData: FormData) {
   return accountFormSchema.safeParse({
@@ -23,6 +23,7 @@ type CycleFields = {
   statement_day: number | null;
   payment_day: number | null;
   credit_limit: number | null;
+  minimum_payment: number | null;
 };
 
 /**
@@ -33,7 +34,12 @@ function cycleFields(
   data: ReturnType<typeof accountFormSchema.parse>,
 ): CycleFields | { error: string } {
   if (data.type !== "credit_card") {
-    return { statement_day: null, payment_day: null, credit_limit: null };
+    return {
+      statement_day: null,
+      payment_day: null,
+      credit_limit: null,
+      minimum_payment: null,
+    };
   }
   let limit: number | null = null;
   if (data.creditLimit && data.creditLimit.length > 0) {
@@ -44,11 +50,36 @@ function cycleFields(
     }
     if (limit < 0) return { error: "El límite no puede ser negativo" };
   }
+  let minimum: number | null = null;
+  if (data.minimumPayment && data.minimumPayment.length > 0) {
+    try {
+      minimum = parseAmountToCents(data.minimumPayment);
+    } catch {
+      return { error: "Pago mínimo inválido" };
+    }
+    if (minimum < 0) return { error: "El pago mínimo no puede ser negativo" };
+  }
   return {
     statement_day: data.statementDay,
     payment_day: data.paymentDay,
     credit_limit: limit,
+    minimum_payment: minimum,
   };
+}
+
+/**
+ * Saldo inicial con el signo de la regla del proyecto.
+ *
+ * El formulario pide una magnitud («¿cuánto debes hoy?» en un pasivo,
+ * «¿cuánto tienes?» en un activo) y el signo se pone aquí, una sola vez. Así
+ * es imposible capturar una deuda en positivo, que es lo que hacía que un
+ * abono a la tarjeta subiera el saldo en vez de bajarlo.
+ *
+ * Si alguien escribe un número negativo se respeta: en un pasivo eso es un
+ * saldo a favor, y es un estado válido.
+ */
+function signedInitialBalance(cents: number, type: string): number {
+  return isLiabilityType(type) ? -Math.abs(cents) : cents;
 }
 
 export async function createAccount(
@@ -77,7 +108,7 @@ export async function createAccount(
     owner_id: parsed.data.ownership === "personal" ? userId : null,
     name: parsed.data.name,
     type: parsed.data.type,
-    initial_balance: cents,
+    initial_balance: signedInitialBalance(cents, parsed.data.type),
     created_by: userId,
     ...cycle,
   });
@@ -118,7 +149,7 @@ export async function updateAccount(
       name: parsed.data.name,
       type: parsed.data.type,
       owner_id: parsed.data.ownership === "personal" ? userId : null,
-      initial_balance: cents,
+      initial_balance: signedInitialBalance(cents, parsed.data.type),
       ...cycle,
     })
     .eq("id", id);

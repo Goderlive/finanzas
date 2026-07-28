@@ -91,7 +91,8 @@ export default function OfflinePage() {
       transfer_account_id: null,
       category_id: categoryId !== "none" ? categoryId : null,
       type,
-      amount,
+      // El signo va aquí, igual que en el servidor: gasto en negativo.
+      amount: type === "expense" ? -amount : amount,
       description: null,
       occurred_at: cache.defaultDate,
       created_by: cache.currentUserId,

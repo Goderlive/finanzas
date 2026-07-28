@@ -27,7 +27,7 @@ export default async function AccountsPage() {
         .order("created_at", { ascending: true }),
       supabase
         .from("transactions")
-        .select("id, account_id, transfer_account_id, type, amount, occurred_at"),
+        .select("id, account_id, type, amount, occurred_at"),
       supabase
         .from("installment_plans")
         .select(
@@ -52,7 +52,20 @@ export default async function AccountsPage() {
   const all = accounts ?? [];
   const active = all.filter((a) => !a.is_archived);
   const archived = all.filter((a) => a.is_archived);
+  // Suma simple, sin condicionales por tipo: los pasivos ya vienen en
+  // negativo (regla de signo, migración 0018).
   const total = active.reduce((sum, a) => sum + a.current_balance, 0);
+
+  // Desde dónde se puede pagar una tarjeta: cualquier cuenta de activo activa.
+  const sourceAccounts = active
+    .filter((a) => a.account_class === "asset")
+    .map((a) => ({
+      id: a.id,
+      name: a.name,
+      current_balance: a.current_balance,
+    }));
+  const today = new Date();
+  const defaultDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
   // Ciclo de cada tarjeta de crédito, corregido por las compras a MSI.
   const movementList = (movements ?? []) as CycleMovement[];
@@ -81,9 +94,9 @@ export default async function AccountsPage() {
       a.id,
       computeCreditCardCycle(
         a,
-        movementList.filter(
-          (m) => m.account_id === a.id || m.transfer_account_id === a.id,
-        ),
+        // Cada asiento afecta sólo a su propia cuenta: en un traspaso hay una
+        // fila por lado, así que basta filtrar por account_id.
+        movementList.filter((m) => m.account_id === a.id),
         plansByCard.get(a.id) ?? [],
       ),
     );
@@ -95,7 +108,7 @@ export default async function AccountsPage() {
         <div>
           <h1 className="text-xl font-semibold">Cuentas</h1>
           <p className="text-sm text-muted-foreground">
-            Total activo: {formatMoney(total, currency)}
+            Patrimonio en cuentas: {formatMoney(total, currency)}
           </p>
         </div>
         <NewAccountButton />
@@ -114,6 +127,8 @@ export default async function AccountsPage() {
               ownerLabel={ownerLabel(a.owner_id)}
               currency={currency}
               cycle={cycles.get(a.id)}
+              sourceAccounts={sourceAccounts}
+              defaultDate={defaultDate}
             />
           ))}
         </div>
@@ -131,6 +146,8 @@ export default async function AccountsPage() {
               ownerLabel={ownerLabel(a.owner_id)}
               currency={currency}
               cycle={cycles.get(a.id)}
+              sourceAccounts={sourceAccounts}
+              defaultDate={defaultDate}
             />
           ))}
         </section>

@@ -16,7 +16,18 @@ export type AccountType =
   | "cash"
   | "credit_card"
   | "investment"
+  | "loan"
   | "other";
+/**
+ * Naturaleza de una cuenta a efectos de signo. Se deriva de `type` en la
+ * base (columna generada), nunca se escribe a mano.
+ *
+ * REGLA DE SIGNO DEL PROYECTO: `accounts.current_balance` y
+ * `transactions.amount` se guardan siempre con el signo del efecto sobre el
+ * patrimonio neto. Los pasivos van en NEGATIVO cuando se debe. El valor
+ * absoluto y la etiqueta «debes X» son cosa de la presentación.
+ */
+export type AccountClass = "asset" | "liability";
 export type TransactionType = "income" | "expense" | "transfer";
 export type CategoryKind = "income" | "expense";
 export type SplitType = "equal" | "percentage" | "fixed";
@@ -108,14 +119,19 @@ export interface Database {
           owner_id: string | null;
           name: string;
           type: AccountType;
+          /** Generada en la base a partir de `type`. Sólo lectura. */
+          account_class: AccountClass;
           currency: string;
+          /** Con signo: en un pasivo, la deuda va en negativo. */
           initial_balance: number;
+          /** Con signo: en un pasivo, la deuda va en negativo. */
           current_balance: number;
           is_archived: boolean;
           // Sólo para type = 'credit_card'; null en el resto.
           statement_day: number | null;
           payment_day: number | null;
           credit_limit: number | null;
+          minimum_payment: number | null;
           created_by: string;
           created_at: string;
           updated_at: string;
@@ -133,6 +149,7 @@ export interface Database {
           statement_day?: number | null;
           payment_day?: number | null;
           credit_limit?: number | null;
+          minimum_payment?: number | null;
           created_by: string;
           created_at?: string;
           updated_at?: string;
@@ -173,12 +190,23 @@ export interface Database {
           id: string;
           household_id: string;
           account_id: string;
+          /** En un traspaso, la cuenta del asiento hermano. */
           transfer_account_id: string | null;
           category_id: string | null;
           type: TransactionType;
+          /**
+           * CON SIGNO: es el efecto de esta fila sobre `account_id`, y por la
+           * regla de signo del proyecto también sobre el patrimonio neto.
+           * Ingreso > 0, gasto < 0, traspaso: origen < 0 y destino > 0.
+           * Para mostrarlo usa `abs()` (ver `src/lib/money.ts`).
+           */
           amount: number;
           description: string | null;
           occurred_at: string;
+          /** Liga los dos asientos de un traspaso. Null si no lo es. */
+          transfer_group_id: string | null;
+          /** Generada en la base (`type = 'transfer'`). Sólo lectura. */
+          is_transfer: boolean;
           created_by: string;
           created_at: string;
           updated_at: string;
@@ -193,6 +221,7 @@ export interface Database {
           amount: number;
           description?: string | null;
           occurred_at?: string;
+          transfer_group_id?: string | null;
           created_by: string;
           created_at?: string;
           updated_at?: string;
@@ -565,9 +594,57 @@ export interface Database {
         Args: { p_transaction_id: string; p_months: number };
         Returns: string;
       };
+      recalculate_all_balances: {
+        Args: Record<string, never>;
+        Returns: {
+          account_id: string;
+          name: string;
+          before: number;
+          after: number;
+        }[];
+      };
+      /** Crea los dos asientos de un traspaso. Devuelve transfer_group_id. */
+      create_transfer: {
+        Args: {
+          p_from_account: string;
+          p_to_account: string;
+          /** Centavos, SIEMPRE positivo: la función pone los signos. */
+          p_amount: number;
+          p_occurred_at?: string;
+          p_description?: string | null;
+        };
+        Returns: string;
+      };
+      /** Paga una tarjeta desde otra cuenta y reparte el importe. */
+      pay_credit_card: {
+        Args: {
+          p_from_account: string;
+          p_card: string;
+          /** Centavos, SIEMPRE positivo. */
+          p_amount: number;
+          p_occurred_at?: string;
+          p_description?: string | null;
+        };
+        Returns: CardPaymentResult;
+      };
+      credit_card_cycle: {
+        Args: { p_card: string; p_now?: string };
+        Returns: {
+          configured: boolean;
+          last_close: string | null;
+          next_close: string | null;
+          due_date: string | null;
+          raw_debt: number;
+          statement_debt: number;
+          current_debt: number;
+          msi_unbilled: number;
+          minimum_payment: number | null;
+        }[];
+      };
     };
     Enums: {
       account_type: AccountType;
+      account_class: AccountClass;
       transaction_type: TransactionType;
       category_kind: CategoryKind;
       split_type: SplitType;
@@ -582,6 +659,25 @@ export interface Database {
     CompositeTypes: Record<never, never>;
   };
 }
+
+/** Desglose que devuelve `pay_credit_card`. Todos los importes en centavos. */
+export type CardPaymentResult = {
+  transfer_group_id: string;
+  amount: number;
+  /** Cubierto de mensualidades MSI vencidas. */
+  applied_to_msi: number;
+  msi_installments_paid: number;
+  /** Cubierto del saldo revolvente del último corte. */
+  applied_to_statement: number;
+  /** Cubierto de las compras del periodo en curso. */
+  applied_to_period: number;
+  /** Excedente: deja la tarjeta con saldo a favor. */
+  credit_balance: number;
+  statement_debt_before: number;
+  statement_debt_after: number;
+  /** Importe del corte que queda sin cubrir y va a generar intereses. */
+  interest_on: number;
+};
 
 // Atajos útiles
 export type Tables<T extends keyof Database["public"]["Tables"]> =

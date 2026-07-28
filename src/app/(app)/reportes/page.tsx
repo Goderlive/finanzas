@@ -43,6 +43,9 @@ export default async function ReportesPage() {
   const catById = new Map(cats.map((c) => [c.id, c]));
   const children = childrenMap(cats);
   const all = txns ?? [];
+  // Sólo gastos: los traspasos (type = 'transfer') nunca entran a un reporte
+  // de ingreso o gasto. `amount` viene con signo, así que se reporta en
+  // magnitud con Math.abs.
   const currentExpenses = all.filter(
     (t) => t.type === "expense" && t.occurred_at >= currentFirst,
   );
@@ -51,11 +54,13 @@ export default async function ReportesPage() {
   const spent: SpentMap = {};
   let uncategorized = 0;
   for (const t of currentExpenses) {
-    if (t.category_id) spent[t.category_id] = (spent[t.category_id] ?? 0) + t.amount;
-    else uncategorized += t.amount;
+    const magnitude = Math.abs(t.amount);
+    if (t.category_id)
+      spent[t.category_id] = (spent[t.category_id] ?? 0) + magnitude;
+    else uncategorized += magnitude;
   }
   const totalExpenses =
-    currentExpenses.reduce((s, t) => s + t.amount, 0) || 0;
+    currentExpenses.reduce((s, t) => s + Math.abs(t.amount), 0) || 0;
 
   const breakdown = cats
     .filter((c) => !c.parent_id)
@@ -88,7 +93,7 @@ export default async function ReportesPage() {
     for (const t of all) {
       if (t.occurred_at >= mStart && t.occurred_at < mEnd) {
         if (t.type === "income") income += t.amount;
-        else if (t.type === "expense") expense += t.amount;
+        else if (t.type === "expense") expense += Math.abs(t.amount);
       }
     }
     monthsList.push({ label: shortMonth(mStart), income, expense });
@@ -97,7 +102,10 @@ export default async function ReportesPage() {
   // --- Comparativa entre los dos (gasto del mes por persona) ---
   const byMember = new Map<string, number>();
   for (const t of currentExpenses) {
-    byMember.set(t.created_by, (byMember.get(t.created_by) ?? 0) + t.amount);
+    byMember.set(
+      t.created_by,
+      (byMember.get(t.created_by) ?? 0) + Math.abs(t.amount),
+    );
   }
   const memberComparison = members.map((m) => ({
     name: m.display_name,

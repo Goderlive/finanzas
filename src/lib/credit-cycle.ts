@@ -84,11 +84,16 @@ export function statementClosePlus(
 // Saldos del ciclo
 // ---------------------------------------------------------------------------
 
-/** Movimiento que toca una cuenta (compra, pago, transferencia). */
+/**
+ * Asiento que toca una cuenta (compra, pago, traspaso).
+ *
+ * `amount` viene con signo desde la base: ya es el efecto sobre el saldo de
+ * `account_id`. Un traspaso son dos asientos, uno por cuenta, así que cada
+ * cuenta sólo mira las filas cuyo `account_id` es la suya.
+ */
 export type CycleMovement = {
   id: string;
   account_id: string;
-  transfer_account_id: string | null;
   type: TransactionType;
   amount: number;
   occurred_at: string;
@@ -131,17 +136,15 @@ export function unbilledInstallments(
 }
 
 /**
- * Efecto de un movimiento sobre el saldo de una cuenta, con el mismo signo que
- * `accounts.current_balance`: en una tarjeta, una compra deja el saldo más
- * negativo y un pago lo acerca a cero.
+ * Efecto de un asiento sobre el saldo de una cuenta.
+ *
+ * Desde la migración 0019 el signo vive en la propia fila, así que esto ya no
+ * traduce nada: sólo comprueba que el asiento sea de esta cuenta. En una
+ * tarjeta, una compra (negativa) deja el saldo más negativo y un pago
+ * (positivo) lo acerca a cero.
  */
 export function movementEffect(m: CycleMovement, accountId: string): number {
-  if (m.account_id === accountId) {
-    if (m.type === "income") return m.amount;
-    return -m.amount; // gasto o salida de transferencia
-  }
-  if (m.transfer_account_id === accountId) return m.amount; // entrada
-  return 0;
+  return m.account_id === accountId ? m.amount : 0;
 }
 
 export type CreditCard = {
@@ -150,6 +153,7 @@ export type CreditCard = {
   statement_day: number | null;
   payment_day: number | null;
   credit_limit: number | null;
+  minimum_payment?: number | null;
 };
 
 export type CreditCardCycle = {
@@ -182,6 +186,8 @@ export type CreditCardCycle = {
   overdue: boolean;
   limitUsedPct: number | null;
   availableCredit: number | null;
+  /** Pago mínimo capturado a mano, si está configurado. */
+  minimumPayment: number | null;
 };
 
 /**
@@ -227,6 +233,7 @@ export function computeCreditCardCycle(
       overdue: false,
       limitUsedPct,
       availableCredit,
+      minimumPayment: card.minimum_payment ?? null,
     };
   }
 
@@ -288,7 +295,70 @@ export function computeCreditCardCycle(
     overdue: statementDebt > 0 && daysToDue < 0,
     limitUsedPct,
     availableCredit,
+    minimumPayment: card.minimum_payment ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Pago de tarjeta
+// ---------------------------------------------------------------------------
+
+export type PaymentShortcut = {
+  key: "total" | "statement" | "minimum";
+  label: string;
+  hint: string;
+  /** Centavos, positivo. */
+  amount: number;
+};
+
+/**
+ * Atajos de monto que se le ofrecen a quien va a pagar, de mayor a menor.
+ *
+ * Se omite el que no aplica: sin saldo del corte no tiene sentido ofrecer
+ * «lo del último corte», y el mínimo sólo aparece si está configurado. Los
+ * duplicados se descartan para no ofrecer dos botones con el mismo importe.
+ */
+export function paymentShortcuts(cycle: CreditCardCycle): PaymentShortcut[] {
+  const out: PaymentShortcut[] = [];
+
+  if (cycle.rawDebt > 0) {
+    out.push({
+      key: "total",
+      label: "Pago total",
+      hint: "Liquida todo el saldo, MSI incluidos",
+      amount: cycle.rawDebt,
+    });
+  }
+  if (cycle.statementDebt > 0) {
+    out.push({
+      key: "statement",
+      label: "Saldo del último corte",
+      hint: "Lo que evita intereses",
+      amount: cycle.statementDebt,
+    });
+  }
+  if (cycle.minimumPayment != null && cycle.minimumPayment > 0) {
+    out.push({
+      key: "minimum",
+      label: "Pago mínimo",
+      hint: "Genera intereses sobre el resto",
+      amount: cycle.minimumPayment,
+    });
+  }
+
+  const seen = new Set<number>();
+  return out.filter((s) => !seen.has(s.amount) && seen.add(s.amount));
+}
+
+/**
+ * Parte del saldo del corte que un pago de `amount` dejaría sin cubrir, y que
+ * por tanto va a generar intereses. 0 si el pago alcanza.
+ */
+export function interestExposure(
+  cycle: CreditCardCycle,
+  amount: number,
+): number {
+  return Math.max(0, cycle.statementDebt - Math.max(0, amount));
 }
 
 /** "5 mar" — etiqueta corta para fechas del ciclo. */

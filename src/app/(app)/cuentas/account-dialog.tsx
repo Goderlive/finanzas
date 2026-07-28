@@ -6,7 +6,7 @@ import type { Tables } from "@/lib/supabase/database.types";
 import type { ActionResult } from "@/lib/action-result";
 import { centsToInput } from "@/lib/money";
 import { accountTypeLabels } from "@/lib/labels";
-import { accountTypes } from "./schema";
+import { accountTypes, isLiabilityType } from "./schema";
 import { createAccount, updateAccount } from "./actions";
 import {
   Dialog,
@@ -38,6 +38,7 @@ export function AccountDialog({
   const isEdit = Boolean(account);
   const [type, setType] = useState(account?.type ?? "checking");
   const isCard = type === "credit_card";
+  const isLiability = isLiabilityType(type);
   const [state, formAction] = useActionState<ActionResult, FormData>(
     isEdit ? updateAccount : createAccount,
     { ok: false },
@@ -112,17 +113,27 @@ export function AccountDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="initialBalance">Saldo inicial</Label>
+            <Label htmlFor="initialBalance">
+              {isLiability ? "¿Cuánto debes hoy?" : "Saldo inicial"}
+            </Label>
             <Input
               id="initialBalance"
               name="initialBalance"
               inputMode="decimal"
+              // Siempre en magnitud: en un pasivo el usuario escribe la deuda
+              // como número positivo y la acción le pone el signo. Capturar
+              // una deuda en positivo era lo que hacía que pagarla la
+              // aumentara en vez de reducirla.
               defaultValue={
-                account ? centsToInput(account.initial_balance) : "0.00"
+                account
+                  ? centsToInput(Math.abs(account.initial_balance))
+                  : "0.00"
               }
             />
             <p className="text-xs text-muted-foreground">
-              El saldo actual se recalcula con tus movimientos.
+              {isLiability
+                ? "Escribe la deuda como número positivo. El saldo actual se recalcula con tus movimientos."
+                : "El saldo actual se recalcula con tus movimientos."}
             </p>
           </div>
 
@@ -161,19 +172,35 @@ export function AccountDialog({
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="creditLimit">Límite de crédito</Label>
-                <Input
-                  id="creditLimit"
-                  name="creditLimit"
-                  inputMode="decimal"
-                  placeholder="50000.00"
-                  defaultValue={
-                    account?.credit_limit != null
-                      ? centsToInput(account.credit_limit)
-                      : ""
-                  }
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="creditLimit">Límite de crédito</Label>
+                  <Input
+                    id="creditLimit"
+                    name="creditLimit"
+                    inputMode="decimal"
+                    placeholder="50000.00"
+                    defaultValue={
+                      account?.credit_limit != null
+                        ? centsToInput(account.credit_limit)
+                        : ""
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="minimumPayment">Pago mínimo</Label>
+                  <Input
+                    id="minimumPayment"
+                    name="minimumPayment"
+                    inputMode="decimal"
+                    placeholder="Opcional"
+                    defaultValue={
+                      account?.minimum_payment != null
+                        ? centsToInput(account.minimum_payment)
+                        : ""
+                    }
+                  />
+                </div>
               </div>
 
               <p className="text-xs text-muted-foreground">

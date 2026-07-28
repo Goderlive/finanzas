@@ -20,7 +20,7 @@ import type {
   Tables,
   TransactionType,
 } from "@/lib/supabase/database.types";
-import { formatMoney, parseAmountToCents } from "@/lib/money";
+import { formatMoneyAbs, parseAmountToCents } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -98,22 +98,27 @@ export function TransactionsView({
 
   const base: Display[] = useMemo(
     () =>
-      transactions.map((t) => ({
-        id: t.id,
-        type: t.type,
-        amount: t.amount,
-        description: t.description,
-        occurred_at: t.occurred_at,
-        accountName: accountNames[t.account_id] ?? "—",
-        categoryName: t.category_id
-          ? (categoryNames[t.category_id] ?? null)
-          : null,
-        transferName: t.transfer_account_id
-          ? (accountNames[t.transfer_account_id] ?? null)
-          : null,
-        createdByName: memberNames[t.created_by] ?? "",
-        pending: false,
-      })),
+      transactions
+        // Un traspaso son dos asientos. En la lista se muestra una sola vez,
+        // desde el lado que sale (amount < 0), que es el que lee natural:
+        // «Ahorro → Tarjeta». El otro lado existe en la base y en los saldos.
+        .filter((t) => t.type !== "transfer" || t.amount < 0)
+        .map((t) => ({
+          id: t.id,
+          type: t.type,
+          amount: t.amount,
+          description: t.description,
+          occurred_at: t.occurred_at,
+          accountName: accountNames[t.account_id] ?? "—",
+          categoryName: t.category_id
+            ? (categoryNames[t.category_id] ?? null)
+            : null,
+          transferName: t.transfer_account_id
+            ? (accountNames[t.transfer_account_id] ?? null)
+            : null,
+          createdByName: memberNames[t.created_by] ?? "",
+          pending: false,
+        })),
     [transactions, accountNames, categoryNames, memberNames],
   );
 
@@ -196,6 +201,9 @@ export function TransactionsView({
     }
 
     const catId = categoryId !== "none" ? categoryId : null;
+    // El alta rápida sólo captura gasto o ingreso. El signo va aquí, igual
+    // que en el servidor: el gasto se guarda en negativo.
+    const signed = type === "expense" ? -amount : amount;
 
     // Sin conexión: encolar en IndexedDB y mostrar como pendiente.
     if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -205,7 +213,7 @@ export function TransactionsView({
         transfer_account_id: null,
         category_id: catId,
         type,
-        amount,
+        amount: signed,
         description: null,
         occurred_at: defaultDate,
         created_by: currentUserId,
@@ -214,7 +222,7 @@ export function TransactionsView({
         {
           id: `q-${Date.now()}`,
           type,
-          amount,
+          amount: signed,
           description: null,
           occurred_at: defaultDate,
           accountName: accountNames[accountId] ?? "—",
@@ -235,7 +243,7 @@ export function TransactionsView({
       item: {
         id: `temp-${Date.now()}`,
         type,
-        amount,
+        amount: signed,
         description: null,
         occurred_at: defaultDate,
         accountName: accountNames[accountId] ?? "—",
@@ -343,6 +351,8 @@ function Row({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  // `amount` ya viene con signo desde la base; aquí sólo se elige el símbolo
+  // y se muestra la magnitud.
   const sign =
     item.type === "income" ? "+" : item.type === "expense" ? "-" : "";
   const amountColor =
@@ -375,7 +385,7 @@ function Row({
       <div className="flex items-center gap-1">
         <span className={cn("font-medium tabular-nums", amountColor)}>
           {sign}
-          {formatMoney(item.amount, currency)}
+          {formatMoneyAbs(item.amount, currency)}
         </span>
         {item.pending ? (
           <span className="w-8" />
