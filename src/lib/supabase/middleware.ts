@@ -39,7 +39,13 @@ export async function updateSession(request: NextRequest) {
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone();
+    // El destino se guarda ANTES de reescribir la URL, con su query incluida:
+    // un acceso directo del launcher entra como /nuevo?tipo=gasto y perder el
+    // `tipo` dejaría al usuario en el formulario equivocado tras el login.
+    const next = `${path}${request.nextUrl.search}`;
     url.pathname = "/login";
+    url.search = "";
+    if (path !== "/") url.searchParams.set("next", next);
     return NextResponse.redirect(url);
   }
 
