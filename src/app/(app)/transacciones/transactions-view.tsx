@@ -1,29 +1,14 @@
 "use client";
 
-import {
-  useEffect,
-  useMemo,
-  useOptimistic,
-  useRef,
-  useState,
-  useTransition,
-} from "react";
+import { useEffect, useMemo, useOptimistic, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { MoreVertical, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import {
-  enqueueTransaction,
-  flushQueue,
-  getQueued,
-} from "@/lib/offline/transactions";
-import type {
-  Tables,
-  TransactionType,
-} from "@/lib/supabase/database.types";
-import { formatMoneyAbs, parseAmountToCents } from "@/lib/money";
+import { flushQueue, getQueued } from "@/lib/offline/transactions";
+import type { Tables, TransactionType } from "@/lib/supabase/database.types";
+import { formatMoney, formatMoneyAbs } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -37,18 +22,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   TransactionForm,
   type FormAccount,
   type FormCategory,
 } from "./transaction-form";
-import { createTransaction, deleteTransaction } from "./actions";
+import { deleteTransaction } from "./actions";
+
+/** Cuántas filas se pintan de golpe. El resto entra con «Mostrar más». */
+const PAGE_SIZE = 100;
 
 type Display = {
   id: string;
@@ -63,9 +44,12 @@ type Display = {
   pending: boolean;
 };
 
-type OptimisticAction =
-  | { kind: "add"; item: Display }
-  | { kind: "remove"; id: string };
+export type Totals = {
+  /** Con signo natural: ingresos positivos, gastos como magnitud. */
+  income: number;
+  expense: number;
+  count: number;
+};
 
 export function TransactionsView({
   transactions,
@@ -78,6 +62,8 @@ export function TransactionsView({
   defaultDate,
   currentUserId,
   householdId,
+  totals,
+  truncated,
 }: {
   transactions: Tables<"transactions">[];
   accounts: FormAccount[];
@@ -89,6 +75,8 @@ export function TransactionsView({
   defaultDate: string;
   currentUserId: string;
   householdId: string;
+  totals: Totals;
+  truncated: boolean;
 }) {
   const router = useRouter();
   const rawById = useMemo(
@@ -98,42 +86,45 @@ export function TransactionsView({
 
   const base: Display[] = useMemo(
     () =>
-      transactions
-        // Un traspaso son dos asientos. En la lista se muestra una sola vez,
-        // desde el lado que sale (amount < 0), que es el que lee natural:
-        // «Ahorro → Tarjeta». El otro lado existe en la base y en los saldos.
-        .filter((t) => t.type !== "transfer" || t.amount < 0)
-        .map((t) => ({
-          id: t.id,
-          type: t.type,
-          amount: t.amount,
-          description: t.description,
-          occurred_at: t.occurred_at,
-          accountName: accountNames[t.account_id] ?? "—",
-          categoryName: t.category_id
-            ? (categoryNames[t.category_id] ?? null)
-            : null,
-          transferName: t.transfer_account_id
-            ? (accountNames[t.transfer_account_id] ?? null)
-            : null,
-          createdByName: memberNames[t.created_by] ?? "",
-          pending: false,
-        })),
+      transactions.map((t) => ({
+        id: t.id,
+        type: t.type,
+        amount: t.amount,
+        description: t.description,
+        occurred_at: t.occurred_at,
+        // En un traspaso el asiento que sale (amount < 0) tiene el origen en
+        // `account_id`; el que entra lo tiene al revés. Se normaliza aquí para
+        // que la fila siempre se lea «de dónde → a dónde».
+        accountName:
+          t.type === "transfer" && t.amount > 0 && t.transfer_account_id
+            ? (accountNames[t.transfer_account_id] ?? "—")
+            : (accountNames[t.account_id] ?? "—"),
+        categoryName: t.category_id
+          ? (categoryNames[t.category_id] ?? null)
+          : null,
+        transferName:
+          t.type === "transfer" && t.amount > 0
+            ? (accountNames[t.account_id] ?? null)
+            : t.transfer_account_id
+              ? (accountNames[t.transfer_account_id] ?? null)
+              : null,
+        createdByName: memberNames[t.created_by] ?? "",
+        pending: false,
+      })),
     [transactions, accountNames, categoryNames, memberNames],
   );
 
-  const [items, dispatch] = useOptimistic(
-    base,
-    (state: Display[], action: OptimisticAction) =>
-      action.kind === "add"
-        ? [action.item, ...state]
-        : state.filter((d) => d.id !== action.id),
+  const [items, removeItem] = useOptimistic(base, (state: Display[], id: string) =>
+    state.filter((d) => d.id !== id),
   );
 
   const [editing, setEditing] = useState<Tables<"transactions"> | null>(null);
   const [, startTransition] = useTransition();
-  const formRef = useRef<HTMLFormElement>(null);
   const [queued, setQueued] = useState<Display[]>([]);
+  const [limit, setLimit] = useState(PAGE_SIZE);
+
+  // Cada vez que cambia el filtro se vuelve a empezar por arriba.
+  useEffect(() => setLimit(PAGE_SIZE), [transactions]);
 
   // Sincroniza la cola offline al montar y al reconectar; guarda un cache
   // ligero para la página offline.
@@ -141,7 +132,13 @@ export function TransactionsView({
     try {
       localStorage.setItem(
         "finanzas-offline-cache",
-        JSON.stringify({ accounts, categories, householdId, currentUserId, defaultDate }),
+        JSON.stringify({
+          accounts,
+          categories,
+          householdId,
+          currentUserId,
+          defaultDate,
+        }),
       );
     } catch {
       /* localStorage puede fallar en modo privado */
@@ -174,7 +171,9 @@ export function TransactionsView({
       if (navigator.onLine) {
         const n = await flushQueue();
         if (n > 0) {
-          toast.success(`${n} movimiento${n === 1 ? "" : "s"} sincronizado${n === 1 ? "" : "s"}`);
+          toast.success(
+            `${n} movimiento${n === 1 ? "" : "s"} sincronizado${n === 1 ? "" : "s"}`,
+          );
           router.refresh();
         }
       }
@@ -189,107 +188,35 @@ export function TransactionsView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactions]);
 
-  async function quickAdd(formData: FormData) {
-    const accountId = String(formData.get("accountId") ?? "");
-    const categoryId = String(formData.get("categoryId") ?? "none");
-    const type = String(formData.get("type") ?? "expense") as TransactionType;
-    let amount = 0;
-    try {
-      amount = parseAmountToCents(String(formData.get("amount") ?? ""));
-    } catch {
-      /* validado en el servidor */
-    }
-
-    const catId = categoryId !== "none" ? categoryId : null;
-    // El alta rápida sólo captura gasto o ingreso. El signo va aquí, igual
-    // que en el servidor: el gasto se guarda en negativo.
-    const signed = type === "expense" ? -amount : amount;
-
-    // Sin conexión: encolar en IndexedDB y mostrar como pendiente.
-    if (typeof navigator !== "undefined" && !navigator.onLine) {
-      await enqueueTransaction({
-        household_id: householdId,
-        account_id: accountId,
-        transfer_account_id: null,
-        category_id: catId,
-        type,
-        amount: signed,
-        description: null,
-        occurred_at: defaultDate,
-        created_by: currentUserId,
-      });
-      setQueued((prev) => [
-        {
-          id: `q-${Date.now()}`,
-          type,
-          amount: signed,
-          description: null,
-          occurred_at: defaultDate,
-          accountName: accountNames[accountId] ?? "—",
-          categoryName: catId ? (categoryNames[catId] ?? null) : null,
-          transferName: null,
-          createdByName: memberNames[currentUserId] ?? "",
-          pending: true,
-        },
-        ...prev,
-      ]);
-      toast.message("Guardado offline. Se sincronizará al reconectar.");
-      formRef.current?.reset();
-      return;
-    }
-
-    dispatch({
-      kind: "add",
-      item: {
-        id: `temp-${Date.now()}`,
-        type,
-        amount: signed,
-        description: null,
-        occurred_at: defaultDate,
-        accountName: accountNames[accountId] ?? "—",
-        categoryName: catId ? (categoryNames[catId] ?? null) : null,
-        transferName: null,
-        createdByName: memberNames[currentUserId] ?? "",
-        pending: true,
-      },
-    });
-
-    const res = await createTransaction({ ok: false }, formData);
-    if (!res.ok) {
-      toast.error(res.error ?? "No se pudo guardar");
-    } else {
-      toast.success("Guardado");
-      formRef.current?.reset();
-    }
-  }
-
   function remove(id: string) {
     startTransition(async () => {
-      dispatch({ kind: "remove", id });
+      removeItem(id);
       const res = await deleteTransaction(id);
       if (!res.ok) toast.error(res.error ?? "No se pudo eliminar");
       else toast.success("Movimiento eliminado");
     });
   }
 
-  const groups = useMemo(
-    () => groupByDate([...queued, ...items]),
-    [items, queued],
-  );
+  // Los pendientes de la cola offline van siempre arriba: son de este
+  // dispositivo y todavía no existen para el filtro.
+  const all = useMemo(() => [...queued, ...items], [items, queued]);
+  const groups = useMemo(() => groupByDate(all.slice(0, limit)), [all, limit]);
+  const hidden = all.length - Math.min(limit, all.length);
 
   return (
-    <div className="space-y-6">
-      <QuickAdd
-        formRef={formRef}
-        accounts={accounts}
-        categories={categories}
-        defaultDate={defaultDate}
-        onSubmit={quickAdd}
-      />
+    <div className="space-y-4">
+      <TotalsBar totals={totals} currency={currency} />
 
-      {queued.length + items.length === 0 ? (
+      {truncated ? (
+        <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+          Hay más movimientos de los que caben en una consulta. Los totales
+          cubren sólo los que se muestran: acota el periodo para verlos todos.
+        </p>
+      ) : null}
+
+      {all.length === 0 ? (
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          Aún no hay movimientos. Agrega el primero arriba.
+          No hay movimientos con estos filtros.
         </div>
       ) : (
         <div className="space-y-5">
@@ -314,6 +241,17 @@ export function TransactionsView({
               </div>
             </section>
           ))}
+
+          {hidden > 0 ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={() => setLimit((n) => n + PAGE_SIZE)}
+            >
+              Mostrar {Math.min(hidden, PAGE_SIZE)} más
+            </Button>
+          ) : null}
         </div>
       )}
 
@@ -336,6 +274,56 @@ export function TransactionsView({
           ) : null}
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+/**
+ * Filtrar sin ver el total deja el trabajo a medias. Los traspasos no entran
+ * en ninguna de las tres cifras: mueven dinero entre cuentas propias.
+ */
+function TotalsBar({ totals, currency }: { totals: Totals; currency: string }) {
+  const net = totals.income - totals.expense;
+
+  return (
+    <div className="rounded-xl border bg-card p-3">
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <Total
+          label="Ingresos"
+          value={formatMoney(totals.income, currency)}
+          className="text-emerald-600 dark:text-emerald-400"
+        />
+        <Total label="Gastos" value={formatMoney(totals.expense, currency)} />
+        <Total
+          label="Neto"
+          value={`${net < 0 ? "−" : ""}${formatMoneyAbs(net, currency)}`}
+          className={
+            net < 0 ? "text-destructive" : "text-emerald-600 dark:text-emerald-400"
+          }
+        />
+      </div>
+      <p className="mt-2 text-center text-xs text-muted-foreground">
+        {totals.count} movimiento{totals.count === 1 ? "" : "s"}
+      </p>
+    </div>
+  );
+}
+
+function Total({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className={cn("truncate font-semibold tabular-nums", className)}>
+        {value}
+      </div>
     </div>
   );
 }
@@ -413,107 +401,6 @@ function Row({
         )}
       </div>
     </div>
-  );
-}
-
-function QuickAdd({
-  formRef,
-  accounts,
-  categories,
-  defaultDate,
-  onSubmit,
-}: {
-  formRef: React.RefObject<HTMLFormElement | null>;
-  accounts: FormAccount[];
-  categories: FormCategory[];
-  defaultDate: string;
-  onSubmit: (formData: FormData) => void | Promise<void>;
-}) {
-  const [type, setType] = useState<TransactionType>("expense");
-  const [categoryId, setCategoryId] = useState("none");
-
-  if (accounts.length === 0) return null;
-
-  const catOptions = categories
-    .filter((c) => c.kind === type && !c.parent_id)
-    .flatMap((p) => [
-      { id: p.id, label: p.name },
-      ...categories
-        .filter((c) => c.parent_id === p.id)
-        .map((c) => ({ id: c.id, label: `— ${c.name}` })),
-    ]);
-
-  return (
-    <form
-      ref={formRef}
-      action={onSubmit}
-      className="space-y-3 rounded-xl border bg-card p-3"
-    >
-      <input type="hidden" name="type" value={type} />
-      <input type="hidden" name="occurredAt" value={defaultDate} />
-
-      <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
-        {(["expense", "income"] as const).map((t) => (
-          <button
-            type="button"
-            key={t}
-            onClick={() => {
-              setType(t);
-              setCategoryId("none");
-            }}
-            className={cn(
-              "rounded-md py-1.5 text-sm font-medium transition-colors",
-              type === t
-                ? "bg-background shadow-sm"
-                : "text-muted-foreground",
-            )}
-          >
-            {t === "expense" ? "Gasto" : "Ingreso"}
-          </button>
-        ))}
-      </div>
-
-      <Input
-        name="amount"
-        inputMode="decimal"
-        placeholder="0.00"
-        className="h-11 text-xl"
-        required
-      />
-
-      <div className="grid grid-cols-2 gap-2">
-        <Select name="accountId" defaultValue={accounts[0]?.id}>
-          <SelectTrigger aria-label="Cuenta">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {accounts.map((a) => (
-              <SelectItem key={a.id} value={a.id}>
-                {a.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        <Select name="categoryId" value={categoryId} onValueChange={setCategoryId}>
-          <SelectTrigger aria-label="Categoría">
-            <SelectValue placeholder="Sin categoría" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">Sin categoría</SelectItem>
-            {catOptions.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                {c.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      <Button type="submit" className="w-full">
-        Agregar
-      </Button>
-    </form>
   );
 }
 
