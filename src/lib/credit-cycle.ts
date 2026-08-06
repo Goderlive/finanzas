@@ -197,10 +197,13 @@ export type CreditCardCycle = {
  * de re-sumarse desde `initial_balance`: así nunca discrepan del saldo que la
  * app muestra en el resto de la interfaz.
  *
- * Dos correcciones sobre `current_balance`:
- *   1. se deshacen los movimientos posteriores al corte, para rebobinar; y
+ * Tres correcciones sobre `current_balance`:
+ *   1. se deshacen los movimientos posteriores al corte, para rebobinar;
  *   2. se devuelven las mensualidades MSI que el banco aún no factura, porque
- *      el trigger de saldos descontó la compra completa el día que se hizo.
+ *      el trigger de saldos descontó la compra completa el día que se hizo; y
+ *   3. se vuelven a restar los abonos posteriores al corte, que el paso 1
+ *      deshizo junto con las compras nuevas pero que sí pertenecen a ese
+ *      corte: para pagarlo se hicieron.
  */
 export function computeCreditCardCycle(
   card: CreditCard,
@@ -245,11 +248,16 @@ export function computeCreditCardCycle(
 
   // Movimientos del periodo en curso: posteriores al último corte.
   let effectsAfterClose = 0;
+  let paymentsAfterClose = 0;
   let currentPeriodSpend = 0;
   for (const m of movements) {
     if (m.occurred_at <= lastClose) continue;
     const effect = movementEffect(m, card.id);
     effectsAfterClose += effect;
+    // Cualquier efecto positivo baja lo que hay que pagar del corte: un pago,
+    // pero también una devolución o una bonificación, igual que en el estado
+    // de cuenta del banco.
+    if (effect > 0) paymentsAfterClose += effect;
     // De una compra a MSI el periodo no carga el total, sólo su mensualidad;
     // ésta se suma abajo junto con las de planes de periodos anteriores.
     if (effect < 0 && !msiTxIds.has(m.id)) currentPeriodSpend += -effect;
@@ -266,7 +274,14 @@ export function computeCreditCardCycle(
     card.current_balance -
     effectsAfterClose +
     unbilledInstallments(plans, lastClose, lastClose);
-  const statementDebt = Math.max(0, -balanceAtClose);
+
+  // El rebobinado de arriba deshizo por igual las compras nuevas y los abonos.
+  // Las compras nuevas no son de este corte; los abonos sí, y hay que
+  // devolverlos. Sin esto la deuda del corte no bajaría nunca al pagar,
+  // porque el pago SIEMPRE cae después del corte: la tarjeta cierra el 12 y
+  // se paga el 27. El sobrante de un pago de más no se pierde, ya está
+  // reflejado en `currentDebt`, que se mide contra el saldo real.
+  const statementDebt = Math.max(0, -balanceAtClose - paymentsAfterClose);
 
   // A hoy: el periodo en curso ya devengó la mensualidad que se cobrará en el
   // próximo corte, así que lo no facturado se mide contra ese corte.

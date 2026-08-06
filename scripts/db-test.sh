@@ -58,8 +58,13 @@ dex pg_restore --username postgres --dbname finanzas \
   --no-owner --no-privileges --disable-triggers /tmp/full.dump 2>&1 \
   | grep -viE "warning|already exists" || true
 
-echo "==> Aplicando migraciones del lote 20260728"
-for f in supabase/migrations/20260728*.sql; do
+# El backup restaurado ya trae todo lo anterior al lote 20260728; de ahí en
+# adelante se aplican todas, para que una migración nueva entre a la suite
+# sin tener que tocar este script.
+echo "==> Aplicando migraciones desde el lote 20260728"
+for f in supabase/migrations/*.sql; do
+  stamp="$(basename "$f")"; stamp="${stamp%%_*}"
+  (( 10#${stamp:0:8} < 20260728 )) && continue
   echo "    $(basename "$f")"
   docker exec -i "$CONTAINER" psql -U postgres -d finanzas -v ON_ERROR_STOP=1 -q < "$f" >/dev/null
 done

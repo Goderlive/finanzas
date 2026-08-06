@@ -476,6 +476,188 @@ begin
 end $$;
 rollback;
 
+-- =====================================================================
+\echo ''
+\echo '12. Un pago posterior al corte BAJA la deuda de ese corte'
+\echo '    (el bug de Didi: la tarjeta cierra el 12 y se paga el 27)'
+-- =====================================================================
+-- La tarjeta de tst.setup() corta el 15 y se paga el 5 del mes siguiente.
+-- Con "hoy" = 2026-08-10, el último corte es el 2026-07-15.
+begin;
+do $$
+declare
+  f record;
+  c record;
+begin
+  select * into f from tst.setup();
+
+  -- Compra ANTES del corte: entra al estado de cuenta del 15-jul.
+  insert into public.transactions (household_id, account_id, type, amount,
+                                   description, occurred_at, created_by)
+  values (f.household, f.card, 'expense', -600000, 'Compras del periodo',
+          date '2026-07-10', f.profile);
+
+  -- Pago DESPUÉS del corte, que es cuando se pagan las tarjetas.
+  perform public.pay_credit_card(f.savings, f.card, 300000,
+                                 date '2026-07-27', 'Pago');
+
+  -- Compra del periodo nuevo, ya en el ciclo que cierra el 15-ago.
+  insert into public.transactions (household_id, account_id, type, amount,
+                                   description, occurred_at, created_by)
+  values (f.household, f.card, 'expense', -100000, 'Compra nueva',
+          date '2026-08-02', f.profile);
+
+  select * into c from public.credit_card_cycle(f.card, date '2026-08-10');
+
+  perform tst.assert_true(c.last_close = date '2026-07-15', 'el último corte es el 15-jul');
+  perform tst.assert_eq(c.raw_debt, 400000, 'la deuda total es 4,000 (6,000 - 3,000 + 1,000)');
+  perform tst.assert_eq(c.statement_debt, 300000,
+    'del corte quedan 3,000 por pagar, no 6,000: el pago sí cuenta');
+  perform tst.assert_true(c.statement_debt <= c.raw_debt,
+    'la deuda del corte nunca puede exceder la deuda total de la tarjeta');
+  perform tst.assert_true(c.due_date = date '2026-08-05',
+    'sigue vigente la fecha límite del corte del 15-jul');
+end $$;
+rollback;
+
+-- =====================================================================
+\echo ''
+\echo '13. Pagar el corte completo lo deja en cero y mueve la fecha límite'
+-- =====================================================================
+begin;
+do $$
+declare
+  f record;
+  c record;
+begin
+  select * into f from tst.setup();
+
+  insert into public.transactions (household_id, account_id, type, amount,
+                                   description, occurred_at, created_by)
+  values (f.household, f.card, 'expense', -600000, 'Compras del periodo',
+          date '2026-07-10', f.profile);
+  perform public.pay_credit_card(f.checking, f.card, 600000,
+                                 date '2026-07-27', 'Pago total');
+
+  select * into c from public.credit_card_cycle(f.card, date '2026-08-10');
+
+  perform tst.assert_eq(c.statement_debt, 0, 'el corte queda saldado');
+  perform tst.assert_eq(c.raw_debt, 0, 'la tarjeta queda en cero');
+  perform tst.assert_true(c.due_date = date '2026-09-05',
+    'ya pagado el corte, la fecha relevante es la del corte en curso');
+end $$;
+rollback;
+
+-- =====================================================================
+\echo ''
+\echo '14. Pagar de más deja saldo a favor, no deuda negativa del corte'
+-- =====================================================================
+begin;
+do $$
+declare
+  f record;
+  c record;
+begin
+  select * into f from tst.setup();
+
+  insert into public.transactions (household_id, account_id, type, amount,
+                                   description, occurred_at, created_by)
+  values (f.household, f.card, 'expense', -600000, 'Compras del periodo',
+          date '2026-07-10', f.profile);
+  perform public.pay_credit_card(f.savings, f.card, 800000,
+                                 date '2026-07-27', 'Pago de más');
+
+  select * into c from public.credit_card_cycle(f.card, date '2026-08-10');
+
+  perform tst.assert_eq(c.statement_debt, 0, 'el corte no se vuelve negativo');
+  perform tst.assert_eq(c.raw_debt, 0, 'una tarjeta a favor no reporta deuda');
+  perform tst.assert_eq(tst.balance(f.card), 200000,
+    'los 2,000 de más quedan como saldo a favor en la tarjeta');
+end $$;
+rollback;
+
+-- =====================================================================
+\echo ''
+\echo '15. Las funciones SECURITY DEFINER no cruzan de hogar'
+-- =====================================================================
+begin;
+do $$
+declare
+  f1 record;
+  f2 record;
+  v_ok    boolean;
+  v_count int;
+begin
+  select * into f1 from tst.setup();
+  -- El segundo setup deja la sesión autenticada como el usuario del hogar 2.
+  select * into f2 from tst.setup();
+
+  begin
+    perform * from public.credit_card_cycle(f1.card, date '2026-08-10');
+    v_ok := false;
+  exception when insufficient_privilege then v_ok := true;
+  end;
+  perform tst.assert_true(v_ok,
+    'credit_card_cycle rechaza la tarjeta de otro hogar');
+
+  begin
+    perform public.recalculate_account_balance(f1.savings);
+    v_ok := false;
+  exception when insufficient_privilege then v_ok := true;
+  end;
+  perform tst.assert_true(v_ok,
+    'recalculate_account_balance rechaza la cuenta de otro hogar');
+
+  select count(*) into v_count from public.recalculate_all_balances();
+  perform tst.assert_eq(v_count::bigint, 3::bigint,
+    'recalculate_all_balances sólo ve las 3 cuentas del hogar propio');
+
+  perform tst.assert_true(
+    not exists (select 1 from public.recalculate_all_balances() r
+                 where r.account_id in (f1.card, f1.savings, f1.checking)),
+    'ninguna cuenta del otro hogar aparece en el recálculo');
+end $$;
+rollback;
+
+-- =====================================================================
+\echo ''
+\echo '16. pay_credit_card reparte contra lo que REALMENTE queda del corte'
+-- =====================================================================
+-- Un segundo pago no puede volver a aplicarse a la parte del corte que el
+-- primero ya cubrió. Antes, como statement_debt ignoraba los pagos, el
+-- segundo pago se anotaba entero contra el corte y el saldo a favor
+-- desaparecía del desglose.
+begin;
+do $$
+declare
+  f record;
+  v jsonb;
+begin
+  select * into f from tst.setup();
+
+  insert into public.transactions (household_id, account_id, type, amount,
+                                   description, occurred_at, created_by)
+  values (f.household, f.card, 'expense', -600000, 'Compras del periodo',
+          date '2026-07-10', f.profile);
+
+  perform public.pay_credit_card(f.savings, f.card, 500000,
+                                 date '2026-07-20', 'Primer pago');
+  v := public.pay_credit_card(f.checking, f.card, 200000,
+                              date '2026-07-27', 'Segundo pago');
+
+  perform tst.assert_eq((v->>'statement_debt_before')::bigint, 100000,
+    'al segundo pago ya sólo quedaban 1,000 del corte, no 6,000');
+  perform tst.assert_eq((v->>'applied_to_statement')::bigint, 100000,
+    'sólo 1,000 del segundo pago se aplican al corte');
+  perform tst.assert_eq((v->>'credit_balance')::bigint, 100000,
+    'los otros 1,000 se reportan como saldo a favor');
+  perform tst.assert_eq((v->>'statement_debt_after')::bigint, 0,
+    'el corte queda saldado');
+  perform tst.assert_eq(tst.balance(f.card), 100000,
+    'y la tarjeta queda con 1,000 a favor');
+end $$;
+rollback;
+
 \echo ''
 \echo '======================================================================'
 \echo ' TODAS LAS PRUEBAS PASARON'
