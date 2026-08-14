@@ -73,17 +73,27 @@ echo "==> Instalando el esquema repair"
 docker exec -i "$CONTAINER" psql -U postgres -d finanzas -v ON_ERROR_STOP=1 -q \
   < supabase/repair/20260728_repair_signs.sql >/dev/null
 
-echo ""
-docker cp supabase/tests/20260728_signs_and_transfers_test.sql "$CONTAINER:/tmp/tests.sql" >/dev/null
-if docker exec "$CONTAINER" psql -U postgres -d finanzas -v ON_ERROR_STOP=1 -f /tmp/tests.sql 2>&1 \
-     | grep -vE "^SET$|^BEGIN$|^ROLLBACK$|^DO$|already exists, skipping" \
-     | sed 's|psql:/tmp/tests.sql:[0-9]*: ||'; then
+# Las suites corren en orden de nombre: la del 20260728 instala el esquema
+# `tst` (assert_eq, setup, balance…) del que dependen las posteriores.
+failed=0
+for t in supabase/tests/*.sql; do
   echo ""
-  echo "La sombra sigue en pie para inspeccionarla:"
-  echo "  docker exec -it $CONTAINER psql -U postgres -d finanzas"
-  echo "  docker rm -f $CONTAINER    # cuando termines"
-else
+  docker cp "$t" "$CONTAINER:/tmp/tests.sql" >/dev/null
+  if ! docker exec "$CONTAINER" psql -U postgres -d finanzas -v ON_ERROR_STOP=1 -f /tmp/tests.sql 2>&1 \
+       | grep -vE "^SET$|^BEGIN$|^ROLLBACK$|^DO$|^CREATE |already exists, skipping" \
+       | sed 's|psql:/tmp/tests.sql:[0-9]*: ||'; then
+    echo "FALLÓ: $(basename "$t")" >&2
+    failed=1
+  fi
+done
+
+if (( failed )); then
   echo ""
   echo "PRUEBAS FALLIDAS" >&2
   exit 1
 fi
+
+echo ""
+echo "La sombra sigue en pie para inspeccionarla:"
+echo "  docker exec -it $CONTAINER psql -U postgres -d finanzas"
+echo "  docker rm -f $CONTAINER    # cuando termines"

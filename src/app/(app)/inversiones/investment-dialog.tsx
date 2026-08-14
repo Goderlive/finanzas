@@ -23,15 +23,22 @@ import {
 } from "@/components/ui/select";
 import { SubmitButton } from "@/components/submit-button";
 import { compoundingLabels } from "@/lib/labels";
-import { compoundingMethods } from "./schema";
+import { compoundingMethods, type LinkableAccount } from "./schema";
+import { AccountLinkFields } from "./account-link-fields";
 import { createInvestment, updateInvestment } from "./actions";
 
 export function InvestmentDialog({
   investment,
+  accounts,
+  currency,
+  defaultDate,
   open,
   onOpenChange,
 }: {
   investment?: Tables<"investments">;
+  accounts: LinkableAccount[];
+  currency: string;
+  defaultDate: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -40,6 +47,12 @@ export function InvestmentDialog({
     investment?.investment_type ?? "variable",
   );
   const isFixed = type === "fixed";
+  // Controlada porque filtra las cuentas que se pueden elegir: el guardia de
+  // la 0022 exige que la titularidad de la inversión y la de su cuenta
+  // coincidan.
+  const [ownership, setOwnership] = useState<"joint" | "personal">(
+    investment?.owner_id ? "personal" : "joint",
+  );
   const [state, formAction] = useActionState<ActionResult, FormData>(
     isEdit ? updateInvestment : createInvestment,
     { ok: false },
@@ -86,9 +99,10 @@ export function InvestmentDialog({
             </div>
             <div className="space-y-2">
               <Label htmlFor="ownership">Titularidad</Label>
+              <input type="hidden" name="ownership" value={ownership} />
               <Select
-                name="ownership"
-                defaultValue={investment?.owner_id ? "personal" : "joint"}
+                value={ownership}
+                onValueChange={(v) => setOwnership(v as "joint" | "personal")}
               >
                 <SelectTrigger id="ownership">
                   <SelectValue />
@@ -271,6 +285,22 @@ export function InvestmentDialog({
                 />
               </div>
             </>
+          )}
+
+          {isEdit ? (
+            <p className="text-xs text-muted-foreground">
+              La cuenta donde vive este dinero se cambia desde «Vincular» en el
+              menú de la inversión: mover el capital toca los saldos y no es
+              una edición más del instrumento.
+            </p>
+          ) : (
+            <AccountLinkFields
+              accounts={accounts}
+              ownership={ownership}
+              currency={currency}
+              defaultDate={defaultDate}
+              mode="create"
+            />
           )}
 
           {state.error ? (

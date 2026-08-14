@@ -19,6 +19,7 @@ import {
 } from "@/lib/credit-cycle";
 import { CreditCycleSummary } from "@/components/credit-cycle-summary";
 import { computeFixedIncome } from "@/lib/fixed-income";
+import { netWorthContribution } from "@/lib/portfolio";
 import {
   Card,
   CardAction,
@@ -87,7 +88,7 @@ export default async function HomePage() {
     supabase
       .from("investments")
       .select(
-        "id, name, investment_type, quantity, purchase_price, purchase_date, principal, annual_rate, start_date, maturity_date, compounding, reinvests_at_maturity",
+        "id, name, account_id, investment_type, quantity, purchase_price, purchase_date, principal, annual_rate, start_date, maturity_date, compounding, reinvests_at_maturity",
       ),
     supabase
       .from("price_snapshots")
@@ -125,6 +126,10 @@ export default async function HomePage() {
   // La parte de cuentas es una suma simple, sin condicionales por tipo: los
   // pasivos ya vienen en negativo por la regla de signo (migración 0018), así
   // que las tarjetas restan solas.
+  //
+  // La parte de inversiones no es su valor a secas: una inversión vinculada a
+  // una cuenta (migración 0022) ya tiene su capital dentro de ese saldo, y
+  // sumarle el valor completo lo contaría dos veces. Ver `netWorthContribution`.
   const accountsTotal = (accounts ?? []).reduce(
     (s, a) => s + a.current_balance,
     0,
@@ -137,13 +142,20 @@ export default async function HomePage() {
     }
   }
   // Portafolio = renta variable valuada a último precio + renta fija devengada.
-  const variableValue = (investments ?? [])
+  //
+  // `purchase_price` es el costo promedio ponderado que `syncAggregateFromLots`
+  // mantiene al día, así que el costo sale de aquí sin traerse los lotes.
+  const variablePositions = (investments ?? [])
     .filter((inv) => inv.investment_type === "variable")
-    .reduce((sum, inv) => {
+    .map((inv) => {
       const quantity = inv.quantity ?? 0;
       const price = latestPrice.get(inv.id) ?? inv.purchase_price ?? 0;
-      return sum + Math.round(quantity * price);
-    }, 0);
+      return {
+        value: Math.round(quantity * price),
+        cost: Math.round(quantity * (inv.purchase_price ?? 0)),
+        linked: inv.account_id !== null,
+      };
+    });
 
   const fixedHoldings = (investments ?? [])
     .filter((inv) => inv.investment_type === "fixed")
@@ -158,9 +170,20 @@ export default async function HomePage() {
         reinvests_at_maturity: inv.reinvests_at_maturity ?? false,
       }),
     }));
-  const fixedValue = fixedHoldings.reduce((s, f) => s + f.state.currentValue, 0);
-  const investmentsValue = variableValue + fixedValue;
-  const netWorth = accountsTotal + investmentsValue - debtsTotal;
+  const fixedPositions = fixedHoldings.map(({ inv, state }) => ({
+    value: state.currentValue,
+    cost: inv.principal ?? 0,
+    linked: inv.account_id !== null,
+  }));
+
+  const positions = [...variablePositions, ...fixedPositions];
+  const investmentsValue = positions.reduce((s, p) => s + p.value, 0);
+  const investmentsContribution = positions.reduce(
+    (s, p) => s + netWorthContribution(p),
+    0,
+  );
+  const linkedCount = positions.filter((p) => p.linked).length;
+  const netWorth = accountsTotal + investmentsContribution - debtsTotal;
 
   // Vencimientos de renta fija a menos de 7 días.
   const maturingSoon = fixedHoldings
@@ -293,12 +316,30 @@ export default async function HomePage() {
             <PrivacyToggle className="-mr-2 -mt-1" />
           </CardAction>
         </CardHeader>
-        <CardContent className="text-xs text-muted-foreground">
-          Cuentas <Amount mask="•••••">{formatMoney(accountsTotal, currency)}</Amount>{" "}
-          + inversiones{" "}
-          <Amount mask="•••••">{formatMoney(investmentsValue, currency)}</Amount>{" "}
-          − deudas{" "}
-          <Amount mask="•••••">{formatMoney(debtsTotal, currency)}</Amount>.
+        <CardContent className="space-y-1 text-xs text-muted-foreground">
+          <p>
+            Cuentas{" "}
+            <Amount mask="•••••">{formatMoney(accountsTotal, currency)}</Amount>{" "}
+            + inversiones{" "}
+            <Amount mask="•••••">
+              {formatMoney(investmentsContribution, currency)}
+            </Amount>{" "}
+            − deudas{" "}
+            <Amount mask="•••••">{formatMoney(debtsTotal, currency)}</Amount>.
+          </p>
+          {linkedCount > 0 ? (
+            <p>
+              {linkedCount === 1
+                ? "Una inversión vive dentro de una cuenta"
+                : `${linkedCount} inversiones viven dentro de una cuenta`}
+              , así que su capital ya está contado en el saldo y aquí sólo suma
+              su plusvalía. Valor total del portafolio:{" "}
+              <Amount mask="•••••">
+                {formatMoney(investmentsValue, currency)}
+              </Amount>
+              .
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 

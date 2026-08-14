@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Link2Off } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionProfile } from "@/lib/auth";
 import { getHousehold, getHouseholdMembers } from "@/lib/household";
@@ -19,6 +19,7 @@ import { PrivacyToggle } from "@/components/privacy";
 import { NewInvestmentButton } from "./new-investment-button";
 import { InvestmentItem } from "./investment-item";
 import { FixedItem } from "./fixed-item";
+import type { LinkableAccount } from "./schema";
 
 export default async function InversionesPage() {
   const supabase = await createClient();
@@ -26,6 +27,7 @@ export default async function InversionesPage() {
     { data: investments },
     { data: snapshots },
     { data: allLots },
+    { data: accounts },
     session,
     household,
     members,
@@ -42,12 +44,21 @@ export default async function InversionesPage() {
         .from("investment_lots")
         .select("id, investment_id, type, quantity, price, occurred_at, note")
         .order("occurred_at", { ascending: true }),
+      // Cuentas donde puede vivir el dinero de una inversión. Sólo activo:
+      // el guardia de la 0022 rechaza los pasivos.
+      supabase
+        .from("accounts")
+        .select("id, name, owner_id, current_balance")
+        .eq("account_class", "asset")
+        .eq("is_archived", false)
+        .order("name", { ascending: true }),
       getSessionProfile(),
       getHousehold(),
       getHouseholdMembers(),
     ]);
 
   const currency = household?.base_currency ?? "MXN";
+  const linkable: LinkableAccount[] = accounts ?? [];
   const currentUserId = session?.user.id;
   const memberName = new Map(members.map((m) => [m.id, m.display_name]));
   const ownerLabel = (ownerId: string | null) =>
@@ -143,6 +154,12 @@ export default async function InversionesPage() {
   const totalGain = portfolio.totalGain;
   const totalGainPct = portfolio.totalGainPct ?? 0;
 
+  // Inversiones que aún no viven dentro de una cuenta. No es un error, es el
+  // estado de siempre: suman su valor completo al patrimonio neto. Se avisa
+  // porque ése es justo el estado en el que un peso puede quedar contado dos
+  // veces, si además está en el saldo de alguna cuenta.
+  const unlinked = all.filter((inv) => inv.account_id === null);
+
   // Vencimientos inminentes, para avisar arriba del todo.
   const maturingSoon = fixed
     .map((inv) => ({ inv, state: fixedStates.get(inv.id)! }))
@@ -195,7 +212,11 @@ export default async function InversionesPage() {
         </div>
         <div className="flex items-center gap-1">
           <PrivacyToggle />
-          <NewInvestmentButton />
+          <NewInvestmentButton
+            accounts={linkable}
+            currency={currency}
+            defaultDate={todayIso}
+          />
         </div>
       </div>
 
@@ -224,6 +245,24 @@ export default async function InversionesPage() {
         </div>
       ) : null}
 
+      {unlinked.length > 0 ? (
+        <div className="flex gap-3 rounded-lg border border-dashed p-3 text-sm">
+          <Link2Off className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <div className="space-y-0.5">
+            <p className="font-medium">
+              {unlinked.length === 1
+                ? "Una inversión no está vinculada a una cuenta"
+                : `${unlinked.length} inversiones no están vinculadas a una cuenta`}
+            </p>
+            <p className="text-muted-foreground">
+              Suman su valor completo al patrimonio neto. Si ese dinero también
+              está dentro del saldo de alguna de tus cuentas, ahora mismo está
+              contado dos veces. Vincúlalas desde el menú «⋮» de cada una.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       {all.length === 0 ? (
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           Sin inversiones. Agrega la primera con «Nueva».
@@ -246,7 +285,9 @@ export default async function InversionesPage() {
               investment={inv}
               state={fixedStates.get(inv.id)!}
               ownerLabel={ownerLabel(inv.owner_id)}
+              accounts={linkable}
               currency={currency}
+              defaultDate={todayIso}
             />
           ))}
         </section>
@@ -270,6 +311,7 @@ export default async function InversionesPage() {
               investment={inv}
               latestPrice={latestPrice.get(inv.id) ?? null}
               ownerLabel={ownerLabel(inv.owner_id)}
+              accounts={linkable}
               defaultDate={todayIso}
               currency={currency}
               ret={returns.get(inv.id)!}

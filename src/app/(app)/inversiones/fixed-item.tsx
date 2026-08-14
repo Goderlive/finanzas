@@ -19,21 +19,30 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { InvestmentDialog } from "./investment-dialog";
+import { LinkDialog } from "./link-dialog";
+import { AccountBadge, LinkMenuItems } from "./account-link";
 import { deleteInvestment } from "./actions";
+import type { LinkableAccount } from "./schema";
 
 export function FixedItem({
   investment,
   state,
   ownerLabel,
+  accounts,
   currency,
+  defaultDate,
 }: {
   investment: Tables<"investments">;
   state: FixedIncomeState;
   ownerLabel: string;
+  accounts: LinkableAccount[];
   currency: string;
+  defaultDate: string;
 }) {
   const [editOpen, setEditOpen] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
   const [pending, startTransition] = useTransition();
+  const account = accounts.find((a) => a.id === investment.account_id);
 
   function remove() {
     startTransition(async () => {
@@ -60,7 +69,7 @@ export function FixedItem({
           <div className="truncate font-medium">{investment.name}</div>
           <div className="text-xs text-muted-foreground">
             {rate}% anual · {compoundingLabels[investment.compounding ?? "simple"]}{" "}
-            · {ownerLabel}
+            · {ownerLabel} · <AccountBadge account={account} />
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -93,6 +102,11 @@ export function FixedItem({
                 <Pencil className="h-4 w-4" />
                 Editar
               </DropdownMenuItem>
+              <LinkMenuItems
+                investmentId={investment.id}
+                linked={Boolean(investment.account_id)}
+                onLink={() => setLinkOpen(true)}
+              />
               <DropdownMenuItem
                 onClick={remove}
                 className="text-destructive focus:text-destructive"
@@ -159,8 +173,22 @@ export function FixedItem({
 
       <InvestmentDialog
         investment={investment}
+        accounts={accounts}
+        currency={currency}
+        defaultDate={defaultDate}
         open={editOpen}
         onOpenChange={setEditOpen}
+      />
+      <LinkDialog
+        investmentId={investment.id}
+        investmentName={investment.name ?? "inversión"}
+        capital={investment.principal ?? 0}
+        ownership={investment.owner_id ? "personal" : "joint"}
+        accounts={accounts}
+        currency={currency}
+        defaultDate={defaultDate}
+        open={linkOpen}
+        onOpenChange={setLinkOpen}
       />
     </div>
   );

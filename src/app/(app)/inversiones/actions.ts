@@ -6,11 +6,96 @@ import { requireHousehold } from "@/lib/auth";
 import { parseAmountToCents } from "@/lib/money";
 import { fail, OK, type ActionResult } from "@/lib/action-result";
 import { computeCostBasis } from "@/lib/portfolio";
-import { investmentSchema, lotSchema, priceSchema } from "./schema";
+import { today } from "@/lib/dates";
+import {
+  investmentSchema,
+  linkSchema,
+  lotSchema,
+  priceSchema,
+  NO_ACCOUNT,
+  type FundingSource,
+} from "./schema";
 
 function revalidateInv() {
   revalidatePath("/inversiones");
   revalidatePath("/");
+  // El capital puede haberse movido entre cuentas o haber entrado a una.
+  revalidatePath("/cuentas");
+  revalidatePath("/transacciones");
+}
+
+/**
+ * Deja el dinero de una inversión dentro del saldo de su cuenta.
+ *
+ * Vincular una inversión (`investments.account_id`, migración 0022) afirma
+ * que su capital ya está contado en `accounts.current_balance`. Esta función
+ * es la que hace verdadera esa afirmación, según de dónde venga el dinero:
+ *
+ *   already   el saldo ya lo incluye  -> no se toca nada
+ *   transfer  viene de otra cuenta    -> traspaso de partida doble (0019)
+ *   external  la app nunca lo vio     -> sube el saldo inicial de la cuenta
+ *
+ * EFECTO SOBRE EL PATRIMONIO NETO. No es el mismo en las tres, y tampoco es
+ * el mismo al dar de alta que al vincular una inversión que ya existía:
+ *
+ *                   alta nueva            vincular una existente
+ *   already         sin cambio            BAJA por el capital
+ *   transfer        sin cambio            BAJA por el capital
+ *   external        SUBE por el capital   sin cambio
+ *
+ * Las bajadas no son una pérdida: son la corrección del doble conteo que
+ * había mientras el capital estaba a la vez en el saldo de una cuenta y en
+ * el valor de la inversión. La subida de `external` tampoco es un invento:
+ * es dinero real que la app no conocía. Todo esto está medido en los casos
+ * 8 a 12 de supabase/tests/20260813_investment_account_test.sql.
+ *
+ * La rama `external` mueve `initial_balance` y no registra una transacción a
+ * propósito: no hubo tal movimiento, el dinero siempre estuvo ahí y lo que
+ * estaba mal era el saldo de partida. El trigger de la 0006 propaga el delta
+ * a `current_balance`.
+ */
+async function applyFunding(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  args: {
+    accountId: string;
+    capital: number;
+    funding: FundingSource;
+    fromAccountId?: string | null;
+    occurredAt?: string | null;
+    description: string;
+  },
+): Promise<string | null> {
+  if (args.funding === "already") return null;
+  if (args.capital <= 0) return "El monto invertido debe ser mayor a cero";
+
+  if (args.funding === "transfer") {
+    if (!args.fromAccountId) return "Selecciona la cuenta de origen";
+    if (args.fromAccountId === args.accountId) {
+      return "Si el dinero ya está en esa cuenta, elige la primera opción";
+    }
+    const { error } = await supabase.rpc("create_transfer", {
+      p_from_account: args.fromAccountId,
+      p_to_account: args.accountId,
+      p_amount: args.capital,
+      p_occurred_at: args.occurredAt || today(),
+      p_description: args.description,
+    });
+    return error?.message ?? null;
+  }
+
+  // external
+  const { data: account, error: readError } = await supabase
+    .from("accounts")
+    .select("initial_balance")
+    .eq("id", args.accountId)
+    .single();
+  if (readError) return readError.message;
+
+  const { error } = await supabase
+    .from("accounts")
+    .update({ initial_balance: account.initial_balance + args.capital })
+    .eq("id", args.accountId);
+  return error?.message ?? null;
 }
 
 function parseForm(formData: FormData) {
@@ -63,13 +148,23 @@ type InvestmentColumns = {
 
 function prepared(formData: FormData):
   | { ok: false; error: string }
-  | { ok: true; personal: boolean; columns: InvestmentColumns } {
+  | {
+      ok: true;
+      personal: boolean;
+      /** Capital invertido en centavos: la base del fondeo. */
+      capital: number;
+      /** Cuenta donde vive el dinero; null si queda sin vincular. */
+      accountId: string | null;
+      columns: InvestmentColumns;
+    } {
   const parsed = parseForm(formData);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
   }
   const d = parsed.data;
   const personal = d.ownership === "personal";
+  const rawAccount = String(formData.get("accountId") ?? NO_ACCOUNT);
+  const accountId = rawAccount === NO_ACCOUNT || !rawAccount ? null : rawAccount;
 
   if (d.investmentType === "fixed") {
     let principal = 0;
@@ -95,6 +190,8 @@ function prepared(formData: FormData):
     return {
       ok: true,
       personal,
+      capital: principal,
+      accountId,
       columns: {
         investment_type: "fixed",
         symbol: null,
@@ -126,6 +223,8 @@ function prepared(formData: FormData):
   return {
     ok: true,
     personal,
+    capital: Math.round(qty * price),
+    accountId,
     columns: {
       investment_type: "variable",
       symbol: d.symbol.toUpperCase(),
@@ -143,6 +242,11 @@ function prepared(formData: FormData):
   };
 }
 
+function fundingFrom(formData: FormData): FundingSource {
+  const raw = String(formData.get("funding") ?? "already");
+  return raw === "transfer" || raw === "external" ? raw : "already";
+}
+
 export async function createInvestment(
   _prev: ActionResult,
   formData: FormData,
@@ -152,13 +256,35 @@ export async function createInvestment(
 
   const { userId, householdId } = await requireHousehold();
   const supabase = await createClient();
-  const { error } = await supabase.from("investments").insert({
-    household_id: householdId,
-    owner_id: p.personal ? userId : null,
-    created_by: userId,
-    ...p.columns,
-  });
+  const { data: created, error } = await supabase
+    .from("investments")
+    .insert({
+      household_id: householdId,
+      owner_id: p.personal ? userId : null,
+      created_by: userId,
+      account_id: p.accountId,
+      ...p.columns,
+    })
+    .select("id, name, symbol")
+    .single();
   if (error) return fail(error.message);
+
+  if (p.accountId) {
+    const fundingError = await applyFunding(supabase, {
+      accountId: p.accountId,
+      capital: p.capital,
+      funding: fundingFrom(formData),
+      fromAccountId: formData.get("fromAccountId")?.toString(),
+      occurredAt: formData.get("occurredAt")?.toString(),
+      description: `Aportación a ${created.name ?? created.symbol ?? "inversión"}`,
+    });
+    // La inversión ya existe pero su dinero no llegó a la cuenta: dejarla
+    // vinculada afirmaría algo falso y descuadraría el patrimonio neto.
+    if (fundingError) {
+      await supabase.from("investments").delete().eq("id", created.id);
+      return fail(fundingError);
+    }
+  }
 
   revalidateInv();
   return OK;
@@ -176,6 +302,10 @@ export async function updateInvestment(
 
   const { userId } = await requireHousehold();
   const supabase = await createClient();
+  // Editar una inversión no toca su vinculación: `p.accountId` se ignora a
+  // propósito. Mover el capital de cuenta tiene consecuencias sobre los
+  // saldos y va por su propio diálogo (`linkInvestment` / `unlinkInvestment`);
+  // aquí sólo se corrigen los datos del instrumento.
   const { error } = await supabase
     .from("investments")
     .update({
@@ -185,6 +315,88 @@ export async function updateInvestment(
     .eq("id", id);
   if (error) return fail(error.message);
 
+  revalidateInv();
+  return OK;
+}
+
+/**
+ * Declara que el dinero de una inversión vive dentro de una cuenta, y deja
+ * el saldo de esa cuenta de acuerdo con esa afirmación.
+ *
+ * El orden importa: primero el fondeo, después la vinculación. Si el fondeo
+ * falla, la inversión se queda como estaba y nada quedó a medias.
+ */
+export async function linkInvestment(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const parsed = linkSchema.safeParse({
+    investmentId: formData.get("investmentId"),
+    accountId: formData.get("accountId"),
+    funding: fundingFrom(formData),
+    fromAccountId: formData.get("fromAccountId") ?? undefined,
+    occurredAt: formData.get("occurredAt") ?? undefined,
+  });
+  if (!parsed.success) {
+    return fail(parsed.error.issues[0]?.message ?? "Datos inválidos");
+  }
+  const d = parsed.data;
+  if (d.accountId === NO_ACCOUNT) return fail("Selecciona una cuenta");
+
+  await requireHousehold();
+  const supabase = await createClient();
+
+  const { data: inv, error: readError } = await supabase
+    .from("investments")
+    .select(
+      "id, name, symbol, account_id, investment_type, principal, quantity, purchase_price",
+    )
+    .eq("id", d.investmentId)
+    .single();
+  if (readError) return fail(readError.message);
+  if (inv.account_id) return fail("Esa inversión ya está vinculada");
+
+  // Capital invertido: lo que debe quedar dentro del saldo de la cuenta.
+  const capital =
+    inv.investment_type === "fixed"
+      ? (inv.principal ?? 0)
+      : Math.round((inv.quantity ?? 0) * (inv.purchase_price ?? 0));
+
+  const fundingError = await applyFunding(supabase, {
+    accountId: d.accountId,
+    capital,
+    funding: d.funding,
+    fromAccountId: d.fromAccountId,
+    occurredAt: d.occurredAt,
+    description: `Aportación a ${inv.name ?? inv.symbol ?? "inversión"}`,
+  });
+  if (fundingError) return fail(fundingError);
+
+  const { error } = await supabase
+    .from("investments")
+    .update({ account_id: d.accountId })
+    .eq("id", d.investmentId);
+  if (error) return fail(error.message);
+
+  revalidateInv();
+  return OK;
+}
+
+/**
+ * Desvincula una inversión de su cuenta. NO devuelve el dinero: el saldo de
+ * la cuenta se queda como está y la inversión vuelve a sumar su valor
+ * completo al patrimonio neto, así que el total sube por el capital. Es lo
+ * correcto si el saldo de la cuenta nunca debió incluirlo; si no, hay que
+ * corregir la cuenta a mano.
+ */
+export async function unlinkInvestment(id: string): Promise<ActionResult> {
+  await requireHousehold();
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("investments")
+    .update({ account_id: null })
+    .eq("id", id);
+  if (error) return fail(error.message);
   revalidateInv();
   return OK;
 }

@@ -26,6 +26,8 @@ Migraciones versionadas para Supabase self-hosted (Coolify).
 | `20260728000018_account_class.sql` | `accounts.account_class` (activo/pasivo) + `household_net_worth` |
 | `20260728000019_signed_amounts_transfers.sql` | **Montos con signo** + traspasos de partida doble |
 | `20260728000020_card_payment.sql` | `create_transfer`, `pay_credit_card`, `credit_card_cycle`, pago mínimo |
+| `20260806000021_statement_payments_and_scope.sql` | El pago abona al corte + `EXECUTE` cerrado a `anon` |
+| `20260813000022_investment_account_link.sql` | La inversión vive dentro de una cuenta (`investments.account_id` + guardias) |
 
 ## Migrar con datos reales en producción
 

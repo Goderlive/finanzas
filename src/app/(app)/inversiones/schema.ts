@@ -2,6 +2,41 @@ import { z } from "zod";
 
 export const compoundingMethods = ["simple", "monthly", "daily"] as const;
 
+/** Cuenta a la que se puede vincular una inversión (activo, no archivada). */
+export type LinkableAccount = {
+  id: string;
+  name: string;
+  owner_id: string | null;
+  current_balance: number;
+};
+
+/**
+ * De dónde sale el capital al vincular una inversión a una cuenta.
+ *
+ * Vincular significa «este dinero está DENTRO del saldo de esa cuenta», así
+ * que hay que decir cómo llegó ahí.
+ *
+ *   already   el saldo ya lo incluye. No se toca nada.
+ *   transfer  viene de otra cuenta. Se registra el traspaso.
+ *   external  es dinero que la app nunca vio. Sube el saldo de la cuenta.
+ *
+ * El efecto de cada una sobre el patrimonio neto está en el comentario de
+ * `applyFunding` (actions.ts): no es el mismo en las tres.
+ */
+export const fundingSources = ["already", "transfer", "external"] as const;
+export type FundingSource = (typeof fundingSources)[number];
+
+/** `"none"` es el valor del select cuando la inversión queda sin vincular. */
+export const NO_ACCOUNT = "none";
+
+export const linkSchema = z.object({
+  investmentId: z.string().uuid(),
+  accountId: z.string().min(1, "Selecciona una cuenta"),
+  funding: z.enum(fundingSources),
+  fromAccountId: z.string().optional(),
+  occurredAt: z.string().optional(),
+});
+
 /** Renta variable: acciones, ETFs, cripto. */
 const variableFields = z.object({
   investmentType: z.literal("variable"),

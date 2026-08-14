@@ -27,7 +27,10 @@ import { InvestmentDialog } from "./investment-dialog";
 import { PriceDialog } from "./price-dialog";
 import { LotDialog } from "./lot-dialog";
 import { EvolutionChart } from "./evolution-chart";
+import { LinkDialog } from "./link-dialog";
+import { AccountBadge, LinkMenuItems } from "./account-link";
 import { deleteInvestment, deleteLot } from "./actions";
+import type { LinkableAccount } from "./schema";
 
 type LotRow = Lot & { id: string; note: string | null };
 
@@ -35,6 +38,7 @@ export function InvestmentItem({
   investment,
   latestPrice,
   ownerLabel,
+  accounts,
   defaultDate,
   currency,
   ret,
@@ -44,6 +48,7 @@ export function InvestmentItem({
   investment: Tables<"investments">;
   latestPrice: number | null;
   ownerLabel: string;
+  accounts: LinkableAccount[];
   defaultDate: string;
   currency: string;
   ret: HoldingReturn;
@@ -53,7 +58,9 @@ export function InvestmentItem({
   const [editOpen, setEditOpen] = useState(false);
   const [priceOpen, setPriceOpen] = useState(false);
   const [lotOpen, setLotOpen] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const account = accounts.find((a) => a.id === investment.account_id);
   const [pending, startTransition] = useTransition();
 
   function remove() {
@@ -108,7 +115,7 @@ export function InvestmentItem({
                 </Amount>
               </>
             )}{" "}
-            · {ownerLabel}
+            · {ownerLabel} · <AccountBadge account={account} />
           </div>
           <div className="text-xs text-muted-foreground">
             {latestPrice !== null
@@ -171,6 +178,11 @@ export function InvestmentItem({
                 <Pencil className="h-4 w-4" />
                 Editar
               </DropdownMenuItem>
+              <LinkMenuItems
+                investmentId={investment.id}
+                linked={Boolean(investment.account_id)}
+                onLink={() => setLinkOpen(true)}
+              />
               <DropdownMenuItem
                 onClick={remove}
                 className="text-destructive focus:text-destructive"
@@ -275,8 +287,22 @@ export function InvestmentItem({
 
       <InvestmentDialog
         investment={investment}
+        accounts={accounts}
+        currency={currency}
+        defaultDate={defaultDate}
         open={editOpen}
         onOpenChange={setEditOpen}
+      />
+      <LinkDialog
+        investmentId={investment.id}
+        investmentName={investment.symbol ?? investment.name ?? "inversión"}
+        capital={ret.costBasis}
+        ownership={investment.owner_id ? "personal" : "joint"}
+        accounts={accounts}
+        currency={currency}
+        defaultDate={defaultDate}
+        open={linkOpen}
+        onOpenChange={setLinkOpen}
       />
       <PriceDialog
         investmentId={investment.id}

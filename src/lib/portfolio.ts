@@ -271,6 +271,30 @@ export type PortfolioPosition = {
   annualizedReturn: number | null;
 };
 
+/**
+ * Lo que una inversión aporta al patrimonio neto, en centavos.
+ *
+ * Vinculada a una cuenta (`investments.account_id`), el capital YA está
+ * contado dentro de `accounts.current_balance`: sumar además su valor lo
+ * contaría dos veces, así que sólo aporta la plusvalía. Sin vincular no la
+ * cuenta nadie más y aporta su valor completo, que es lo que hacía la app
+ * antes de la migración 0022.
+ *
+ * En ambas ramas el capital entra al patrimonio exactamente una vez, que es
+ * lo que hace que vincular una inversión no pueda alterar el total salvo
+ * para corregir un doble conteo que ya existía.
+ *
+ * Ojo: la ganancia ya materializada por una venta NO entra aquí. Ese dinero
+ * es efectivo, y su lugar es el saldo de la cuenta donde cayó.
+ */
+export function netWorthContribution(position: {
+  cost: number;
+  value: number;
+  linked: boolean;
+}): number {
+  return position.linked ? position.value - position.cost : position.value;
+}
+
 export type PortfolioSummary = {
   totalCost: number;
   totalValue: number;
