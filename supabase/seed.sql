@@ -9,7 +9,7 @@
 --   goder@example.com  /  esposa@example.com
 --
 -- Nota: las columnas exactas de auth.users/auth.identities pueden variar
--- según la versión de GoTrue de tu Supabase self-hosted. Ajusta si aplica.
+-- según la versión de GoTrue de tu proyecto de Supabase. Ajusta si aplica.
 -- =====================================================================
 
 -- IDs fijos para poder referenciarlos

@@ -1,6 +1,6 @@
 # Base de datos — Finanzas del hogar
 
-Migraciones versionadas para Supabase self-hosted (Coolify).
+Migraciones versionadas para el proyecto de Supabase (nube, supabase.com). La conexión está en `.env.local` (`NEXT_PUBLIC_SUPABASE_URL`, `DATABASE_URL`).
 
 ## Orden de las migraciones
 
